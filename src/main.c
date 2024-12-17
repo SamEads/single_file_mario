@@ -1,8 +1,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <raylib.h>
+#include <stb_rect_pack.h>
 #include <string.h>
-#include "../external/stb/stb_rect_pack.h"
 
 #define DEBUG
 
