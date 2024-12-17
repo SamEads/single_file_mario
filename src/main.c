@@ -3,6 +3,7 @@
 #include <raylib.h>
 #include <stb_rect_pack.h>
 #include <string.h>
+#include <math.h>
 
 #define DEBUG
 
@@ -42,11 +43,14 @@ typedef struct game game_t;
 struct level;
 typedef struct level level_t;
 
+struct render_context;
+typedef struct render_context_t;
+
 struct player;
 typedef struct player player_t;
-void player_init(player_t*);
-void player_update(player_t*, level_t*);
-void player_draw(player_t*, game_t*);
+void player_init(struct player*);
+void player_update(struct player*, struct level*);
+void player_draw(struct player*, struct render_context*);
 
 #pragma endregion
 
@@ -63,7 +67,6 @@ void path_index(const char* src_loc, char* dest_loc) {
 	}
 	// re-add delimiter
 	dest_loc[fname_len] = '\0';
-	return dest_loc;
 }
 
 #pragma endregion
@@ -186,7 +189,7 @@ void background_init(const char* res_loc, background_t* background, bool tiled) 
 }
 
 void background_draw(background_t* background) {
-	int bg_x = (int)floor(background->x * background->parallax_x) % background->tex.width;
+	int bg_x = (int)(background->x * background->parallax_x) % background->tex.width;
 
 	Rectangle bg_rect = (Rectangle) { 0, 0, GetScreenWidth(), GetScreenHeight() };
 	Rectangle screen_rect = (Rectangle){ bg_x, background->y * background->parallax_y, bg_rect.width, bg_rect.height };
@@ -272,7 +275,7 @@ void sprite_init(const char* res_loc, sprite_t* anim, Image* atlas_img, stbrp_co
     // Load the .dat file and initialize the animation frames and order (same as before)
     FILE* file = fopen(data_path, "r");
 	if (file == NULL) {
-		anim->frame_count = ceil(sprite_height / (float)sprite_width);
+		anim->frame_count = ceilf(sprite_height / (float)sprite_width);
 		anim->frames = malloc(anim->frame_count * sizeof(sprite_frame_t));
 		int frame_height = sprite_width > sprite_height ? sprite_height : sprite_width;
 		for (int i = 0; i < anim->frame_count; ++i) {
