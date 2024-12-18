@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.0)
 project(single_file_mario C)
 set(CMAKE_C_STANDARD 99)
 
+file(COPY assets DESTINATION .)
+
 # raylib
 include(FetchContent)
 set(FETCHCONTENT_QUIET FALSE)

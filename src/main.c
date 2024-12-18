@@ -7,20 +7,18 @@
 
 #define DEBUG
 
-typedef long id_t;
+typedef long entity_id_t;
 
 // resource related defines
-#define SPRITES_PATH "assets/sprites"
-#define SOUNDS_PATH "assets/sounds"
-#define BACKGROUNDS_PATH "assets/backgrounds"
+#define SPRITES_PATH 		"assets/sprites"
+#define SOUNDS_PATH 		"assets/sounds"
+#define BACKGROUNDS_PATH 	"assets/backgrounds"
 #define MAX_PATH_LEN 256
 
 // game related defines
 #define SCREEN_WIDTH 256
 #define SCREEN_HEIGHT 224
 #define MAX_CONTROLLERS 4
-
-#define CONST_MODIFY(v, t, n) *((t*)&v) = n;
 
 #define ORANGE_SKY	(Color) { 255, 231, 181, 255 }
 #define BLUE_SKY	(Color) { 0, 99, 189, 255 }
@@ -42,22 +40,25 @@ typedef long id_t;
 
 #pragma region Forward Declares
 
+struct controller_state;
+typedef struct controller_state controller_state_t;
+
 struct game;
 typedef struct game game_t;
 
+struct render_context;
+typedef struct render_context render_context_t;
+
 struct level;
 typedef struct level level_t;
-void level_update(level_t*);
-void level_draw(level_t*);
-
-struct render_context;
-typedef struct render_context_t;
+void level_update(level_t*, game_t*);
+void level_draw(level_t*, render_context_t*);
 
 struct player;
-typedef struct player_t;
-void player_init(struct player*);
-void player_update(struct player*, struct level*);
-void player_draw(struct player*, struct render_context*);
+typedef struct player player_t;
+void player_init(player_t*);
+void player_update(player_t* player, level_t* level, controller_state_t* controller);
+void player_draw(player_t*, render_context_t*);
 
 #pragma endregion
 
@@ -152,10 +153,10 @@ typedef struct controller_buttons {
 	bool l, r;
 } controller_buttons_t;
 
-typedef struct controller_state {
+struct controller_state {
 	controller_buttons_t current;
 	controller_buttons_t previous;
-} controller_state_t;
+};
 
 void controller_state_update(controller_state_t* state) {
 	memcpy(&state->previous, &state->current, sizeof(controller_state_t));
@@ -171,9 +172,9 @@ void controller_state_update(controller_state_t* state) {
 
 #pragma region Render Context
 
-typedef struct render_context {
+struct render_context {
 	Texture2D sprite_atlas;
-} render_context_t;
+};
 
 #pragma endregion
 
@@ -200,9 +201,7 @@ void background_init(const char* res_loc, background_t* background, bool tiled) 
 
 	// get full bg path
 	char img_path[MAX_PATH_LEN] = "";
-	if (indexed_loc) {
-		snprintf(img_path, sizeof(img_path), BACKGROUNDS_PATH "/%s.png", indexed_loc);
-	}
+	snprintf(img_path, sizeof(img_path), BACKGROUNDS_PATH "/%s.png", indexed_loc);
 
 	// open file for reading
 	FILE* f = fopen(img_path, "r");
@@ -282,13 +281,12 @@ void sprite_init(const char* res_loc, sprite_t* anim, Image* atlas_img, stbrp_co
 	path_index(res_loc, indexed_fname);
 
     anim->frame_count = anim->order_count = 0;
-    anim->order = anim->frames = NULL;
+    anim->order = NULL;
+	anim->frames = NULL;
     
     char image_path[MAX_PATH_LEN] = "", data_path[MAX_PATH_LEN] = "";
-	if (indexed_fname) {
-		snprintf(image_path, sizeof(image_path), SPRITES_PATH "/%s.png", indexed_fname);
-		snprintf(data_path, sizeof(data_path), SPRITES_PATH "/%s.dat", indexed_fname);
-	}
+	snprintf(image_path, sizeof(image_path), SPRITES_PATH "/%s.png", indexed_fname);
+	snprintf(data_path, sizeof(data_path), SPRITES_PATH "/%s.dat", indexed_fname);
 
     Image img = LoadImage(image_path);
     int sprite_width = img.width, sprite_height = img.height;
@@ -407,7 +405,7 @@ void font_init(const char* res_loc, const char* order, font_t* font, Image* atla
 	sprite_init(res_loc, &font->sprite_data, atlas, rect_packer);
 	font->spacing = 0;
 	int order_len = strlen(order);
-	memcpy(font->order, order, (size_t)order_len + 1);
+	memcpy((void*)font->order, order, (size_t)order_len + 1);
 #ifdef DEBUG
 	printd("Font [%s] order: [", res_loc);
 	for (int i = 0; i < order_len; ++i) {
@@ -488,7 +486,7 @@ void physics_body_init(physics_body_t* body, int width, int height) {
 	body->xspd = 0.0f;
 	body->yspd = 0.0f;
 	body->xspd_max = 10.0f;
-	body->yspd_max = 4.0f;
+	body->yspd_max = 5.0f;
 	body->grav = 0.2f;
 	body->width = width;
 	body->height = height;
@@ -530,25 +528,43 @@ bool collision_rectangles(Rectangle base_rect, Rectangle* recs, int num_rects) {
 
 #pragma region Player
 
-typedef struct player {
+struct player {
 	physics_body_t body;
 	float img_index;
-} player_t;
+};
 
 void player_init(player_t* player) {
 	physics_body_init(&player->body, 8, 14);
 	player->img_index = 0;
 }
 
-void player_update(player_t* player, level_t* level) {
+void player_update(player_t* player, level_t* level, controller_state_t* controller) {
 	player->img_index += 0.125f;
-	player->body.grav = 0.1875f;
+	player->body.grav = 0.3750;
+	if (controller->current.a) {
+		if (!controller->previous.a) {
+			player->body.yspd = -5.0f;
+		} else {
+			player->body.grav = 0.1875;
+		}
+	}
 	physics_body_update(&player->body);
+	if (player->body.y > SCREEN_HEIGHT - 32) {
+		player->body.y = SCREEN_HEIGHT - 32;
+	}
 }
 
 void player_draw(player_t* player, render_context_t* context) {
-	sprite_draw(&mario_sprites.walk[POWERUP_BIG], player->img_index, player->body.x, player->body.y, context);
-	text_draw("WELCOME TO DINOSAUR LAND!    \nIN THIS FAR AWAY LAND, \nMARIO HAS FOUND HIMSELF \nFACE-TO-FACE WITH NEW FRIENDS,     \nAND TERRIFYING ENEMIES!", &fnt_hud, 0, 0, context, player->img_index * 2.0);
+	static int text_val = 0;
+	sprite_t* render_sprite = mario_sprites.jump;
+	player->img_index = (player->body.yspd > 0) ? 1 : 0;
+	if (player->body.y >= SCREEN_HEIGHT - 32) {
+		render_sprite = mario_sprites.idle;
+	}
+	if (render_sprite != NULL) {
+		sprite_draw(&render_sprite[POWERUP_BIG], player->img_index, player->body.x, player->body.y, context);
+	}
+	text_draw("WELCOME TO DINOSAUR LAND!    \nIN THIS FAR AWAY LAND, \nMARIO HAS FOUND HIMSELF \nFACE-TO-FACE WITH NEW FRIENDS,     \nAND TERRIFYING ENEMIES!", &fnt_hud, 0, 0, context, (text_val++) / 3.0f);
 }
 
 #pragma endregion
@@ -561,11 +577,13 @@ typedef struct tilemap {
 	collision_type_t** data;
 	int width;
 	int height;
+	int tile_size;
 } tilemap_t;
 
 void tilemap_init(tilemap_t* map, int width, int height) {
 	map->width = width;
 	map->height = height;
+	map->tile_size = 16;
 	map->data = malloc(width * sizeof(collision_type_t*));
 	for (int x = 0; x < width; ++x) {
 		map->data[x] = calloc(height, sizeof(collision_type_t));
@@ -580,6 +598,9 @@ void tilemap_free(tilemap_t* map) {
 }
 
 inline collision_type_t tilemap_get(tilemap_t* map, int x, int y) {
+	if (x < 0 || y < 0 || x >= map->width || y >= map->height) {
+		return COLLISION_AIR;
+	}
 	return map->data[x][y];
 }
 
@@ -589,14 +610,14 @@ inline collision_type_t tilemap_get(tilemap_t* map, int x, int y) {
 
 #pragma region Level Init & Free
 
-typedef struct level {
+struct level {
 	player_t player;
 	arraylist_t entities;
 	Color background_color;
 	background_t background;
 	tilemap_t collision_map;
-	id_t next_entity_id;
-} level_t;
+	entity_id_t next_entity_id;
+};
 
 void level_init(level_t* level, const char* background_res, Color background_color, int width, int height) {
 	player_init(&level->player);
@@ -679,7 +700,7 @@ typedef struct entity_goomba {
 } entity_goomba_t;
 
 void goomba_init(entity_goomba_t* entity, level_t* level) {
-	entity_init(entity, ENTITY_GOOMBA, level, 8, 6);
+	entity_init(&entity->base, ENTITY_GOOMBA, level, 8, 6);
 }
 
 void goomba_update(entity_t* entity, level_t* level) {
@@ -692,47 +713,14 @@ void goomba_draw(entity_t* entity, level_t* level, render_context_t* context) {
 
 #pragma endregion
 
-#pragma region Level Update & Draw
-
-void level_update(level_t* level) {
-	player_update(&level->player, level);
-
-	for (int i = 0; i < level->entities.count; ++i) {
-		entity_t* e = (entity_t*)level->entities.data[i];
-		entity_update(e, level);	// all entity update
-		e->update(e, level);		// unique update
-	}
-}
-
-void level_draw(level_t* level, render_context_t* context) {
-	level->background.parallax_x = 0.5f;
-	level->background.parallax_y = 1.0f;
-	level->background.y = -level->background.tex.height + SCREEN_HEIGHT;
-	level->background.x -= 1.25f;
-	background_draw(&level->background);
-	for (int x = 0; x < level->collision_map.width; ++x) {
-		for (int y = 0; y < level->collision_map.height; ++y) {
-			if (level->collision_map.data[x][y] != COLLISION_AIR) {
-				DrawRectangle(x * 16, y * 16, 16, 16, (Color) { 255, 128, 0, 190 });
-			}
-		}
-	}
-	for (int i = 0; i < level->entities.count; ++i) {
-		entity_t* e = (entity_t*)level->entities.data[i];
-		e->update(e, level);
-	}
-	player_draw(&level->player, context);
-}
-
-#pragma endregion
-
 #pragma region Game Control
-typedef struct game {
+
+struct game {
 	int controller_count;
 	render_context_t render_context;
 	controller_state_t* controllers;
 	level_t* level;
-} game_t;
+};
 
 void game_update(game_t* game) {
 	// update controllers
@@ -742,7 +730,7 @@ void game_update(game_t* game) {
 	}
 
 	if (game->level) {
-		level_update(game->level);
+		level_update(game->level, game);
 	}
 }
 
@@ -835,6 +823,40 @@ void game_end(game_t* game) {
 	free(game->level);
 
 	CloseWindow();
+}
+
+#pragma endregion
+
+#pragma region Level Update & Draw
+
+void level_update(level_t* level, game_t* game) {
+	player_update(&level->player, level, &game->controllers[0]);
+
+	for (int i = 0; i < level->entities.count; ++i) {
+		entity_t* e = (entity_t*)level->entities.data[i];
+		entity_update(e, level);	// all entity update
+		e->update(e, level);		// unique update
+	}
+}
+
+void level_draw(level_t* level, render_context_t* context) {
+	level->background.parallax_x = 0.5f;
+	level->background.parallax_y = 1.0f;
+	level->background.y = -level->background.tex.height + SCREEN_HEIGHT;
+	level->background.x -= 1.25f;
+	background_draw(&level->background);
+	for (int x = 0; x < level->collision_map.width; ++x) {
+		for (int y = 0; y < level->collision_map.height; ++y) {
+			if (level->collision_map.data[x][y] != COLLISION_AIR) {
+				DrawRectangle(x * 16, y * 16, 16, 16, (Color) { 255, 128, 0, 190 });
+			}
+		}
+	}
+	for (int i = 0; i < level->entities.count; ++i) {
+		entity_t* e = (entity_t*)level->entities.data[i];
+		e->update(e, level);
+	}
+	player_draw(&level->player, context);
 }
 
 #pragma endregion

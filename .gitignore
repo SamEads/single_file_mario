@@ -2,3 +2,4 @@
 *.DS_Store
 /external
 .vscode/settings.json
+sprite_atlas_dump.png

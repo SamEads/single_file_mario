@@ -1,0 +1,13 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "shell",
+            "label": "compile and run mario",
+            "command": "cmake --build ${workspaceFolder}/build -j 8",
+            "args": [
+            ],
+            "group": "build"
+        }
+    ]
+}
