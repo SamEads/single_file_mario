@@ -49,6 +49,9 @@ typedef struct game game_t;
 struct render_context;
 typedef struct render_context render_context_t;
 
+struct entity;
+typedef struct entity entity_t;
+
 struct level;
 typedef struct level level_t;
 void level_update(level_t*, game_t*);
@@ -81,66 +84,36 @@ void path_index(const char* src_loc, char* dest_loc) {
 
 #pragma region Array List
 
-typedef struct arraylist {
-	void** data; // array of pointers to store the elements
-	int count;
-	int capacity;
-} arraylist_t;
-
-void arraylist_init(arraylist_t* list, int initial_capacity) {
-	list->count = 0;
-	list->capacity = initial_capacity;
-	list->data = malloc(list->capacity * sizeof(void*));
+#define ARRAYLIST_DEFINE(type, signifier) \
+typedef struct signifier { type* data; int count; int capacity; } signifier##_t; \
+void signifier##_init(signifier##_t* list, int initial_capacity) { \
+	printd("type: " #type "\n"); \
+    list->count = 0; \
+    list->capacity = initial_capacity; \
+    list->data = malloc(list->capacity * sizeof(type)); \
+} \
+void signifier##_free(signifier##_t* list) { \
+    list->count = list->capacity = 0; \
+    free(list->data); \
+} \
+void signifier##_push(signifier##_t* list, type data) { \
+    if (list->count >= list->capacity) { \
+        list->capacity *= ARRAYLIST_SCALE_FACTOR; \
+        list->data = realloc(list->data, list->capacity * sizeof(type)); \
+    } \
+    list->data[list->count] = data; \
+    list->count++; \
+} \
+type signifier##_get(signifier##_t* list, int index) { \
+    return (index < 0 || index >= list->count) ? (type){ 0 } : list->data[index]; \
+} \
+void signifier##_remove(signifier##_t* list, int index) { \
+    if (index < 0 || index >= list->count) return; \
+    for (int i = index; i < list->count - 1; i++) list->data[i] = list->data[i + 1]; /* pushes data to the left */ \
+    --list->count; \
 }
 
-void arraylist_free(arraylist_t* list) {
-	list->count = 0;
-	list->capacity = 0;
-	free(list->data);
-}
-
-void arraylist_push(arraylist_t* list, void* data) {
-	if (list->count >= list->capacity) {
-		list->capacity *= ARRAYLIST_SCALE_FACTOR;
-		list->data = realloc(list->data, list->capacity * sizeof(void*));
-	}
-	list->data[list->count] = data;
-	list->count++;
-}
-
-void arraylist_pop(arraylist_t* list) {
-	if (list->count > 0) {
-		list->count--;
-	}
-}
-
-void arraylist_remove(arraylist_t* list, int index) {
-	if (index < 0 || index >= list->count) {
-		return;
-	}
-
-	for (int i = index; i < list->count - 1; i++) {
-		list->data[i] = list->data[i + 1];
-	}
-
-	list->count--;
-}
-
-int arraylist_find(arraylist_t* list, void* element, int (*cmp)(const void*, const void*)) {
-	for (int i = 0; i < list->count; i++) {
-		if (cmp(list->data[i], element) == 0) {
-			return i;	// element found, return calculated index
-		}
-	}
-	return ARRAYLIST_NULL;
-}
-
-void* arraylist_get(arraylist_t* list, int index) {
-	if (index < 0 || index >= list->count) {
-		return NULL;
-	}
-	return list->data[index];
-}
+ARRAYLIST_DEFINE(Rectangle, rectangle_arraylist)
 
 #pragma endregion
 
@@ -526,6 +499,29 @@ bool collision_rectangles(Rectangle base_rect, Rectangle* recs, int num_rects) {
 
 #pragma endregion
 
+#pragma region Entity
+
+typedef enum entity_type {
+	ENTITY_NONE = -1,
+	ENTITY_GOOMBA,
+	ENTITY_KOOPA,
+	ENTITY_PIRANHA,
+	ENTITY_COUNT,
+} entity_type_t;
+
+struct entity {
+	id_t id;
+	entity_type_t type;
+	physics_body_t body;
+	bool is_active;
+	void (*update)(struct entity*, struct level*);
+	void (*draw)(struct entity*, struct level*, render_context_t* context);
+};
+
+ARRAYLIST_DEFINE(entity_t*, entity_arraylist)
+
+#pragma endregion
+
 #pragma region Player
 
 struct player {
@@ -538,33 +534,8 @@ void player_init(player_t* player) {
 	player->img_index = 0;
 }
 
-void player_update(player_t* player, level_t* level, controller_state_t* controller) {
-	player->img_index += 0.125f;
-	player->body.grav = 0.3750;
-	if (controller->current.a) {
-		if (!controller->previous.a) {
-			player->body.yspd = -5.0f;
-		} else {
-			player->body.grav = 0.1875;
-		}
-	}
-	physics_body_update(&player->body);
-	if (player->body.y > SCREEN_HEIGHT - 32) {
-		player->body.y = SCREEN_HEIGHT - 32;
-	}
-}
-
-void player_draw(player_t* player, render_context_t* context) {
-	static int text_val = 0;
-	sprite_t* render_sprite = mario_sprites.jump;
-	player->img_index = (player->body.yspd > 0) ? 1 : 0;
-	if (player->body.y >= SCREEN_HEIGHT - 32) {
-		render_sprite = mario_sprites.idle;
-	}
-	if (render_sprite != NULL) {
-		sprite_draw(&render_sprite[POWERUP_BIG], player->img_index, player->body.x, player->body.y, context);
-	}
-	text_draw("WELCOME TO DINOSAUR LAND!    \nIN THIS FAR AWAY LAND, \nMARIO HAS FOUND HIMSELF \nFACE-TO-FACE WITH NEW FRIENDS,     \nAND TERRIFYING ENEMIES!", &fnt_hud, 0, 0, context, (text_val++) / 3.0f);
+Rectangle player_rectangle(player_t* player) {
+	return (Rectangle) { player->body.x + 8, player->body.y, 16, 32 };
 }
 
 #pragma endregion
@@ -612,7 +583,7 @@ inline collision_type_t tilemap_get(tilemap_t* map, int x, int y) {
 
 struct level {
 	player_t player;
-	arraylist_t entities;
+	entity_arraylist_t entities;
 	Color background_color;
 	background_t background;
 	tilemap_t collision_map;
@@ -621,7 +592,7 @@ struct level {
 
 void level_init(level_t* level, const char* background_res, Color background_color, int width, int height) {
 	player_init(&level->player);
-	arraylist_init(&level->entities, 64);
+	entity_arraylist_init(&level->entities, 64);
 	level->background.clamp_x = false;
 	level->background.clamp_y = true;
 	level->next_entity_id = 0;
@@ -645,31 +616,19 @@ void level_init(level_t* level, const char* background_res, Color background_col
 }
 
 void level_free(level_t* level) {
-	arraylist_free(&level->entities);
+	for (int i = 0; i < level->entities.count; ++i) {
+		if (level->entities.data[i] != NULL) {
+			free(level->entities.data[i]);
+		}
+	}
+	entity_arraylist_free(&level->entities);
 	background_free(&level->background);
 	tilemap_free(&level->collision_map);
 }
 
 #pragma endregion
 
-#pragma region Entity
-
-typedef enum entity_type {
-	ENTITY_NONE = -1,
-	ENTITY_GOOMBA,
-	ENTITY_KOOPA,
-	ENTITY_PIRANHA,
-	ENTITY_COUNT,
-} entity_type_t;
-
-typedef struct entity {
-	id_t id;
-	entity_type_t type;
-	physics_body_t body;
-	bool is_active;
-	void (*update)(struct entity*, struct level*);
-	void (*draw)(struct entity*, struct level*, render_context_t* context);
-} entity_t;
+#pragma region Entity Functions
 
 void entity_init(entity_t* entity, entity_type_t type, level_t* level, int width, int height) {
 	physics_body_init(&entity->body, width, height);
@@ -831,9 +790,12 @@ void game_end(game_t* game) {
 
 void level_update(level_t* level, game_t* game) {
 	player_update(&level->player, level, &game->controllers[0]);
-
+	{
+		entity_t* e = malloc(sizeof(entity_t));
+		entity_arraylist_push(&level->entities, e);
+	}
 	for (int i = 0; i < level->entities.count; ++i) {
-		entity_t* e = (entity_t*)level->entities.data[i];
+		entity_t* e = &level->entities.data[i];
 		entity_update(e, level);	// all entity update
 		e->update(e, level);		// unique update
 	}
@@ -853,10 +815,64 @@ void level_draw(level_t* level, render_context_t* context) {
 		}
 	}
 	for (int i = 0; i < level->entities.count; ++i) {
-		entity_t* e = (entity_t*)level->entities.data[i];
+		entity_t* e = &level->entities.data[i];
 		e->update(e, level);
 	}
 	player_draw(&level->player, context);
+}
+
+#pragma endregion
+
+#pragma region Player Update
+
+void player_draw(player_t* player, render_context_t* context) {
+	static int text_val = 0;
+	sprite_t* render_sprite = mario_sprites.jump;
+	player->img_index = (player->body.yspd > 0) ? 1 : 0;
+	if (player->body.y >= SCREEN_HEIGHT - 32) {
+		render_sprite = mario_sprites.idle;
+	}
+
+	Rectangle prect = player_rectangle(player);
+	int tile_size = 16;
+	rectangle_arraylist_t collision_list;
+	rectangle_arraylist_init(&collision_list, 1);
+	int left = prect.x / tile_size, right = (prect.x + prect.width) / tile_size;
+	int top = prect.y / tile_size, bottom = (prect.y + prect.height) / tile_size;
+	for (int x = left - 1; x <= right + 1; ++x) {
+		for (int y = top - 1; y <= bottom + 1; ++y) {
+			rectangle_arraylist_push(&collision_list, (Rectangle) { x * 16, y * 16, 16, 16 });
+		}
+	}
+	for (int i = 0; i < collision_list.capacity; ++i) {
+		Rectangle pos_rect = rectangle_arraylist_get(&collision_list, i);
+		DrawRectanglePro(pos_rect, (Vector2) { 0, 0 }, 0, (Color) { 255, 0, 0, 255 });
+	}
+	printd("%d\n", collision_list.count);
+	rectangle_arraylist_free(&collision_list);
+	DrawRectanglePro(prect, (Vector2) { 0, 0 }, 0, (Color) { 0, 255, 255, 255 });
+
+	if (render_sprite != NULL) {
+		sprite_draw(&render_sprite[POWERUP_BIG], player->img_index, player->body.x, player->body.y, context);
+	}
+	text_draw("WELCOME TO DINOSAUR LAND!    \nIN THIS FAR AWAY LAND, \nMARIO HAS FOUND HIMSELF \nFACE-TO-FACE WITH NEW FRIENDS,     \nAND TERRIFYING ENEMIES!", &fnt_hud, 0, 0, context, (text_val++) / 3.0f);
+}
+
+void player_update(player_t* player, level_t* level, controller_state_t* controller) {
+	player->img_index += 0.125f;
+	player->body.grav = 0.3750;
+	if (controller->current.a) {
+		if (!controller->previous.a) {
+			player->body.yspd = -5.0f;
+		} else {
+			player->body.grav = 0.1875;
+		}
+	}
+	physics_body_update(&player->body);
+
+	if (player->body.y > SCREEN_HEIGHT - 32) {
+		player->body.y = SCREEN_HEIGHT - 32;
+	}
 }
 
 #pragma endregion
