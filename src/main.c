@@ -247,7 +247,6 @@ void sprite_draw(sprite_t* sprite, int image_index, float x, float y, render_con
 	DrawTexturePro(context->sprite_atlas, sprite_rect, screen_rect, (Vector2) { 0.0f, 0.0f }, 0, WHITE);
 }
 
-// Modify the sprite_animation_init function
 void sprite_init(const char* res_loc, sprite_t* anim, Image* atlas_img, stbrp_context* rect_packer) {
 	// replace all instances of "." with "/" for local resources
 	char indexed_fname[MAX_PATH_LEN] = "";
@@ -264,7 +263,7 @@ void sprite_init(const char* res_loc, sprite_t* anim, Image* atlas_img, stbrp_co
     Image img = LoadImage(image_path);
     int sprite_width = img.width, sprite_height = img.height;
 
-    // Load the .dat file and initialize the animation frames and order (same as before)
+    // load .dat file and initialize the animation frames and order
     FILE* file = fopen(data_path, "r");
 	if (file == NULL) {
 		anim->frame_count = ceilf(sprite_height / (float)sprite_width);
@@ -790,14 +789,18 @@ void game_end(game_t* game) {
 
 void level_update(level_t* level, game_t* game) {
 	player_update(&level->player, level, &game->controllers[0]);
-	{
+	/*{
 		entity_t* e = malloc(sizeof(entity_t));
 		entity_arraylist_push(&level->entities, e);
-	}
+	}*/
 	for (int i = 0; i < level->entities.count; ++i) {
-		entity_t* e = &level->entities.data[i];
-		entity_update(e, level);	// all entity update
-		e->update(e, level);		// unique update
+		entity_t* e = entity_arraylist_get(&level->entities, i);
+		if (e != NULL) {
+			entity_update(e, level);	// all entity update
+			if (e->update != NULL) {	// uniquely assigned update
+				e->update(e, level);
+			}
+		}
 	}
 }
 
@@ -815,8 +818,10 @@ void level_draw(level_t* level, render_context_t* context) {
 		}
 	}
 	for (int i = 0; i < level->entities.count; ++i) {
-		entity_t* e = &level->entities.data[i];
-		e->update(e, level);
+		entity_t* e = level->entities.data[i];
+		if (e != NULL && e->update != NULL) {
+			e->update(e, level);
+		}
 	}
 	player_draw(&level->player, context);
 }
