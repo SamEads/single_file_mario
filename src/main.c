@@ -5,6 +5,17 @@
 #include <string.h>
 #include <math.h>
 
+#pragma region Sounds [ Temporary. Should be passed by context ]
+
+struct sounds {
+	Sound bump;
+	Sound jump;
+} sounds;
+
+#pragma endregion
+
+#pragma region Defines
+
 #define DEBUG
 
 typedef long entity_id_t;
@@ -38,6 +49,8 @@ typedef long entity_id_t;
 #define printd(...)
 #endif
 
+#pragma endregion
+
 #pragma region Forward Declares
 
 struct controller_state;
@@ -52,6 +65,12 @@ typedef struct render_context render_context_t;
 struct entity;
 typedef struct entity entity_t;
 
+struct physics_body;
+typedef struct physics_body physics_body_t;
+
+struct sprite_frame;
+typedef struct sprite_frame sprite_frame_t;
+
 struct level;
 typedef struct level level_t;
 void level_update(level_t*, game_t*);
@@ -60,8 +79,16 @@ void level_draw(level_t*, render_context_t*);
 struct player;
 typedef struct player player_t;
 void player_init(player_t*);
-void player_update(player_t* player, level_t* level, controller_state_t* controller);
-void player_draw(player_t*, render_context_t*);
+void player_update(player_t*, level_t*, controller_state_t*);
+void player_draw(player_t*, level_t*, render_context_t*);
+
+#pragma endregion
+
+#pragma region Random
+
+int rand_int(int min, int max) {
+	return min + rand() / (RAND_MAX / (max - min + 1) + 1);
+}
 
 #pragma endregion
 
@@ -85,18 +112,17 @@ void path_index(const char* src_loc, char* dest_loc) {
 #pragma region Array List
 
 #define ARRAYLIST_DEFINE(type, signifier) \
-typedef struct signifier { type* data; int count; int capacity; } signifier##_t; \
-void signifier##_init(signifier##_t* list, int initial_capacity) { \
-	printd("type: " #type "\n"); \
+typedef struct signifier { type* data; int count; int capacity; } signifier##_arraylist_t; \
+void signifier##_arraylist_init(signifier##_arraylist_t* list, int initial_capacity) { \
     list->count = 0; \
     list->capacity = initial_capacity; \
     list->data = malloc(list->capacity * sizeof(type)); \
 } \
-void signifier##_free(signifier##_t* list) { \
+void signifier##_arraylist_free(signifier##_arraylist_t* list) { \
     list->count = list->capacity = 0; \
     free(list->data); \
 } \
-void signifier##_push(signifier##_t* list, type data) { \
+void signifier##_arraylist_push(signifier##_arraylist_t* list, type data) { \
     if (list->count >= list->capacity) { \
         list->capacity *= ARRAYLIST_SCALE_FACTOR; \
         list->data = realloc(list->data, list->capacity * sizeof(type)); \
@@ -104,16 +130,56 @@ void signifier##_push(signifier##_t* list, type data) { \
     list->data[list->count] = data; \
     list->count++; \
 } \
-type signifier##_get(signifier##_t* list, int index) { \
+type signifier##_arraylist_get(signifier##_arraylist_t* list, int index) { \
     return (index < 0 || index >= list->count) ? (type){ 0 } : list->data[index]; \
 } \
-void signifier##_remove(signifier##_t* list, int index) { \
+void signifier##_arraylist_remove(signifier##_arraylist_t* list, int index) { \
     if (index < 0 || index >= list->count) return; \
     for (int i = index; i < list->count - 1; i++) list->data[i] = list->data[i + 1]; /* pushes data to the left */ \
     --list->count; \
 }
 
-ARRAYLIST_DEFINE(Rectangle, rectangle_arraylist)
+ARRAYLIST_DEFINE(Rectangle, rectangle)
+
+#pragma endregion
+
+#pragma region Tilemap
+
+typedef enum collision_type { COLLISION_AIR, COLLISION_SEMI, COLLISION_SOLID } collision_type_t;
+
+#define TILEMAP_DEFINE(type, signifier, default_val) \
+typedef struct signifier##_tilemap { \
+	type** data; \
+	int width; \
+	int height; \
+	int tile_size; \
+} signifier##_tilemap_t; \
+void signifier##_tilemap_init(signifier##_tilemap_t* map, int width, int height) { \
+	map->width = width; \
+	map->height = height; \
+	map->tile_size = 16; \
+	map->data = malloc(width * sizeof(type*)); \
+	for (int x = 0; x < width; ++x) { \
+		map->data[x] = calloc(height, sizeof(type)); \
+	} \
+} \
+void signifier##_tilemap_free(signifier##_tilemap_t* map) { \
+	for (int x = 0; x < map->width; ++x) { \
+		free(map->data[x]); \
+	} \
+	free(map->data); \
+} \
+inline type signifier##_tilemap_get(signifier##_tilemap_t* map, int x, int y) { \
+	if (x < 0 || y < 0 || x >= map->width || y >= map->height) { \
+		return default_val; \
+	} \
+	return map->data[x][y]; \
+} \
+inline void signifier##_tilemap_set(signifier##_tilemap_t* map, int x, int y, type val) { \
+	map->data[x][y] = val; \
+}
+
+TILEMAP_DEFINE(collision_type_t, collision, COLLISION_AIR)
 
 #pragma endregion
 
@@ -217,10 +283,11 @@ void background_free(background_t* background) {
 #pragma region Sprites
 
 typedef struct sprite_frame {
-	Rectangle source;
+	int x, y;
 } sprite_frame_t;
 
 typedef struct sprite {
+	int width, height;
 	int frame_count;
 	sprite_frame_t* frames;
 	int order_count;
@@ -236,25 +303,35 @@ void sprite_free(sprite_t* sprite) {
 	}
 }
 
-void sprite_draw(sprite_t* sprite, int image_index, float x, float y, render_context_t* context) {
-	// frame to utilize from sprite frames
-	int frame_index = (sprite->order == NULL) ?
-		image_index % sprite->frame_count :					// no custom order; get frame from image index
-		sprite->order[image_index % sprite->order_count];	// custom order; get frame from order index
-
-	Rectangle sprite_rect = sprite->frames[frame_index].source;
-	Rectangle screen_rect = (Rectangle) { x, y, sprite_rect.width, sprite_rect.height };
-	DrawTexturePro(context->sprite_atlas, sprite_rect, screen_rect, (Vector2) { 0.0f, 0.0f }, 0, WHITE);
+const sprite_frame_t sprite_get_frame(sprite_t* sprite, int image_index) {
+	return (sprite->order == NULL) ?
+		sprite->frames[image_index % sprite->frame_count] :					// no custom order; get frame from image index
+		sprite->frames[sprite->order[image_index % sprite->order_count]];	// custom order; get frame from order index
 }
 
-void sprite_init(const char* res_loc, sprite_t* anim, Image* atlas_img, stbrp_context* rect_packer) {
+void sprite_draw_pro(sprite_t* sprite, int image_index, float x, float y, int origin_x, int origin_y, bool flip_x, bool flip_y, render_context_t* context) {
+	// frame to utilize from sprite frames
+	sprite_frame_t frame = sprite_get_frame(sprite, image_index);
+	Rectangle sprite_rect = (Rectangle){ floorf(frame.x), floorf(frame.y), sprite->width, sprite->height };
+	if (flip_x) {
+		sprite_rect.width = -sprite_rect.width;
+	}
+	Rectangle screen_rect = (Rectangle){ floorf(x), floorf(y), sprite_rect.width, sprite_rect.height };
+	DrawTexturePro(context->sprite_atlas, sprite_rect, screen_rect, (Vector2) { origin_x, origin_y }, 0, WHITE);
+}
+
+inline void sprite_draw(sprite_t* sprite, int image_index, float x, float y, bool flip_x, bool flip_y, render_context_t* context) {
+	sprite_draw_pro(sprite, image_index, x, y, 0.0f, 0.0f, flip_x, flip_y, context);
+}
+
+void sprite_init(const char* res_loc, sprite_t* sprite, Image* atlas_img, stbrp_context* rect_packer) {
 	// replace all instances of "." with "/" for local resources
 	char indexed_fname[MAX_PATH_LEN] = "";
 	path_index(res_loc, indexed_fname);
 
-    anim->frame_count = anim->order_count = 0;
-    anim->order = NULL;
-	anim->frames = NULL;
+	sprite->frame_count = sprite->order_count = 0;
+    sprite->order = NULL;
+	sprite->frames = NULL;
     
     char image_path[MAX_PATH_LEN] = "", data_path[MAX_PATH_LEN] = "";
 	snprintf(image_path, sizeof(image_path), SPRITES_PATH "/%s.png", indexed_fname);
@@ -266,18 +343,21 @@ void sprite_init(const char* res_loc, sprite_t* anim, Image* atlas_img, stbrp_co
     // load .dat file and initialize the animation frames and order
     FILE* file = fopen(data_path, "r");
 	if (file == NULL) {
-		anim->frame_count = ceilf(sprite_height / (float)sprite_width);
-		anim->frames = malloc(anim->frame_count * sizeof(sprite_frame_t));
+		sprite->frame_count = ceilf(sprite_height / (float)sprite_width);
+		sprite->frames = malloc(sprite->frame_count * sizeof(sprite_frame_t));
 		int frame_height = sprite_width > sprite_height ? sprite_height : sprite_width;
-		for (int i = 0; i < anim->frame_count; ++i) {
+		sprite->width = sprite_width;
+		sprite->height = frame_height;
+		for (int i = 0; i < sprite->frame_count; ++i) {
 			stbrp_rect r = { 0, sprite_width, frame_height };
 			if (stbrp_pack_rects(rect_packer, &r, 1)) {
 				ImageDraw(atlas_img, img, (Rectangle) { 0, (i * frame_height), sprite_width, frame_height }, (Rectangle) { r.x, r.y, sprite_width, frame_height }, WHITE);
-				anim->frames[i].source = (Rectangle) { (float)r.x, (float)r.y, (float)r.w, (float)r.h };
+				sprite->frames[i].x = r.x;
+				sprite->frames[i].y = r.y;
 			}
 		}
 		UnloadImage(img);
-		printd("Loaded sprite [%s] with [%d] frames\n", res_loc, anim->frame_count);
+		printd("Loaded sprite [%s] with [%d] frames\n", res_loc, sprite->frame_count);
 		return;
 	}
     
@@ -285,24 +365,27 @@ void sprite_init(const char* res_loc, sprite_t* anim, Image* atlas_img, stbrp_co
     char line[256] = "";
 
     while (fgets(line, sizeof(line), file)) {
-        if (anim->frame_count == 0 && strncmp(line, "frames:", 7) == 0) {
-            if (sscanf(line, "frames: %d", &anim->frame_count) != 1) {
+        if (sprite->frame_count == 0 && strncmp(line, "frames:", 7) == 0) {
+            if (sscanf(line, "frames: %d", &sprite->frame_count) != 1) {
                 goto close_file;
             } else {
-                anim->frames = malloc(anim->frame_count * sizeof(sprite_frame_t));
-                sprite_height = img.height / anim->frame_count;
+                sprite->frames = malloc(sprite->frame_count * sizeof(sprite_frame_t));
+                sprite_height = img.height / sprite->frame_count;
                 printd("Frame dimensions: [%d, %d]\n", sprite_width, sprite_height);
 
-				for (int i = 0; i < anim->frame_count; ++i) {
+				sprite->width = sprite_width;
+				sprite->height = sprite_height;
+				for (int i = 0; i < sprite->frame_count; ++i) {
 					stbrp_rect r = { 0, sprite_width, sprite_height };
 					if (stbrp_pack_rects(rect_packer, &r, 1)) {
 						ImageDraw(atlas_img, img, (Rectangle) { 0, (int)(i * sprite_height), sprite_width, sprite_height }, (Rectangle) { r.x, r.y, sprite_width, sprite_height }, WHITE);
-						anim->frames[i].source = (Rectangle) { (float)r.x, (float)r.y, (float)r.w, (float)r.h };
+						sprite->frames[i].x = r.x;
+						sprite->frames[i].y = r.y;
 					}
 				}
             }
         }
-        if (anim->order == NULL && strncmp(line, "order:", 6) == 0) {
+        if (sprite->order == NULL && strncmp(line, "order:", 6) == 0) {
             if (sscanf(line, "order: %s", order_buf) != 1) {
                 goto close_file;
             } else {
@@ -318,11 +401,11 @@ void sprite_init(const char* res_loc, sprite_t* anim, Image* atlas_img, stbrp_co
                         while (order_buf[i] == ',' && i < order_len) {
                             i++;
                         }
-                        anim->order_count++;
+                        sprite->order_count++;
                     } else i++;
                 }
 
-                anim->order = malloc(anim->order_count * sizeof(int));
+                sprite->order = malloc(sprite->order_count * sizeof(int));
 
                 // put animation frame order into the animation order array
                 for (int i = 0, num_count = 0; i < order_len;) {
@@ -334,7 +417,7 @@ void sprite_init(const char* res_loc, sprite_t* anim, Image* atlas_img, stbrp_co
                         while (order_buf[i] == ',' && i < order_len) {
                             i++;
                         }
-                        anim->order[num_count++] = temp;
+                        sprite->order[num_count++] = temp;
                     } else i++;
                 }
             }
@@ -343,17 +426,17 @@ void sprite_init(const char* res_loc, sprite_t* anim, Image* atlas_img, stbrp_co
 
 close_file:
 #ifdef DEBUG
-	if (anim->order) {
-		printd("Loaded sprite [%s] with [%d] frames and pre-defined order of [", res_loc, anim->frame_count);
-		for (int i = 0; i < anim->order_count; ++i) {
-			printd("%d", anim->order[i]);
-			if (i < anim->order_count - 1) {
+	if (sprite->order) {
+		printd("Loaded sprite [%s] with [%d] frames and pre-defined order of [", res_loc, sprite->frame_count);
+		for (int i = 0; i < sprite->order_count; ++i) {
+			printd("%d", sprite->order[i]);
+			if (i < sprite->order_count - 1) {
 				printd(", ");
 			}
 		}
 		printd("]\n");
 	} else {
-		printd("Loaded sprite [%s] with [%d] frames\n", res_loc, anim->frame_count);
+		printd("Loaded sprite [%s] with [%d] frames\n", res_loc, sprite->frame_count);
 	}
 #endif
     fclose(file);
@@ -362,8 +445,6 @@ close_file:
 #pragma endregion
 
 #pragma region Text
-
-typedef enum font_type { font_hud, font_textbox } font_type_t;
 
 typedef struct font {
 	sprite_t sprite_data;
@@ -394,10 +475,11 @@ void font_free(font_t* font) {
 	sprite_free(&font->sprite_data);
 }
 
-void text_draw(const char* text, font_t* font, float x, float y, render_context_t* context, int limit) {
+void text_draw(const char* text, font_t* font, float x, float y, render_context_t* context) {
 	size_t string_len = strlen(text), order_len = strlen(font->order);
 	int _x = x, _y = y;
-	for (int i = 0; i < string_len && i < limit; ++i) {
+	int font_width = font->sprite_data.width;
+	for (int i = 0; i < string_len; ++i) {
 		if (text[i] == ' ') {
 			_x += 8;
 			continue;
@@ -409,8 +491,8 @@ void text_draw(const char* text, font_t* font, float x, float y, render_context_
 		}
 		for (int j = 0; j < order_len; ++j) {
 			if (font->order[j] == text[i]) {
-				sprite_draw(&font->sprite_data, j, _x, _y, context);
-				_x += font->sprite_data.frames[j].source.width + font->spacing;;
+				sprite_draw(&font->sprite_data, j, _x, _y, false, false, context);
+				_x += font_width + font->spacing;
 				break;
 			}
 		}
@@ -421,9 +503,9 @@ void text_draw(const char* text, font_t* font, float x, float y, render_context_
 
 #pragma region Animations
 
-typedef enum powerups { POWERUP_SMALL, POWERUP_BIG, POWERUP_FIRE, } powerups_t;
+typedef enum powerup { POWERUP_SMALL, POWERUP_BIG, POWERUP_FIRE, } powerup_t;
 
-struct {
+struct mario_sprites {
 	sprite_t idle[2];
 	sprite_t walk[2];
 	sprite_t run[2];
@@ -444,24 +526,41 @@ struct {
 
 #pragma endregion
 
-#pragma region Physics Components
+#pragma region Physics & Collision
 
-typedef struct physics_body {
-	int x, y;
+struct physics_body {
+	float x, y;
 	int width, height;
+	float origin_x, origin_y;
 	float xspd, yspd;
 	float xspd_max, yspd_max;
 	float grav;
-} physics_body_t;
+	bool grounded;
+};
 
 void physics_body_init(physics_body_t* body, int width, int height) {
 	body->xspd = 0.0f;
 	body->yspd = 0.0f;
+
 	body->xspd_max = 10.0f;
 	body->yspd_max = 5.0f;
+
+	body->origin_x = 0.5f;
+	body->origin_y = 1.0f;
+
+	body->x = 0.0f;
+	body->y = 0.0f;
+
 	body->grav = 0.2f;
+
+	body->grounded = false;
+
 	body->width = width;
 	body->height = height;
+}
+
+Rectangle physics_body_get_rectangle(physics_body_t* body) {
+	return (Rectangle) { body->x - body->width * body->origin_x, body->y - (body->height * body->origin_y), body->width, body->height };
 }
 
 void physics_body_update(physics_body_t* body) {
@@ -483,17 +582,105 @@ void physics_body_update(physics_body_t* body) {
 	body->y += body->yspd;
 }
 
-bool collision_rectangle(Rectangle rec1, Rectangle rec2) {
-	return CheckCollisionRecs(rec1, rec2);
+bool point_in_rectangle(Vector2 p, Rectangle r) {
+	return CheckCollisionPointRec(p, r);
 }
 
-bool collision_rectangles(Rectangle base_rect, Rectangle* recs, int num_rects) {
+bool rectangle_collision(Rectangle r1, Rectangle r2) {
+	return ((r1.x < (r2.x + r2.width) && (r1.x + r1.width) > r2.x) &&
+		(r1.y < (r2.y + r2.height) && (r1.y + r1.height) > r2.y));
+}
+
+bool rectangle_collision_list(Rectangle base_rect, Rectangle* recs, int num_rects) {
 	for (int i = 0; i < num_rects; ++i) {
-		if (collision_rectangle(base_rect, recs[i])) {
+		if (rectangle_collision(base_rect, recs[i])) {
 			return true;
 		}
 	}
 	return false;
+}
+
+void resolve_collisions_x(physics_body_t* body, collision_tilemap_t* map) {
+	Rectangle body_rect = physics_body_get_rectangle(body);
+	int tile_size = map->tile_size;
+
+	int left = body_rect.x / tile_size, right = (body_rect.x + body_rect.width) / tile_size;
+	int top = body_rect.y / tile_size, bottom = (body_rect.y + body_rect.height) / tile_size;
+
+	for (int y = top - 1; y <= bottom + 1; ++y) {
+		// right
+		if (body->xspd > 0) {
+			Rectangle side_player_rect = { body_rect.x + body_rect.width - body->xspd, body_rect.y, body->xspd * 2, body_rect.height };
+
+			for (int x = right; x <= right + 1; ++x) {
+				collision_type_t tile_type = collision_tilemap_get(map, x, y);
+				if (tile_type == COLLISION_AIR) continue;
+
+				Rectangle tile_rect = { x * tile_size, y * tile_size, tile_size, tile_size };
+				if (rectangle_collision(side_player_rect, tile_rect)) {
+					body->x = tile_rect.x - body_rect.width + (body->width / 2);
+					body->xspd = 0;
+				}
+			}
+		}
+		// left
+		else if (body->xspd < 0) {
+			Rectangle side_player_rect = { body_rect.x + body->xspd, body_rect.y, -body->xspd * 2, body_rect.height };
+
+			for (int x = left - 1; x <= left; ++x) {
+				collision_type_t tile_type = collision_tilemap_get(map, x, y);
+				if (tile_type == COLLISION_AIR) continue;
+
+				Rectangle tile_rect = { x * tile_size, y * tile_size, tile_size, tile_size };
+				if (rectangle_collision(side_player_rect, tile_rect)) {
+					body->x = tile_rect.x + tile_size + (body->width / 2);
+					body->xspd = 0;
+				}
+			}
+		}
+	}
+}
+
+inline void resolve_collisions_y(physics_body_t* body, collision_tilemap_t* map) {
+	Rectangle body_rect = physics_body_get_rectangle(body);
+	int tile_size = map->tile_size;
+
+	int left = body_rect.x / tile_size, right = (body_rect.x + body_rect.width) / tile_size;
+	int top = body_rect.y / tile_size, bottom = (body_rect.y + body_rect.height) / tile_size;
+
+	body->grounded = false;
+	for (int x = left - 1; x <= right + 1; ++x) {
+		// up
+		if (body->yspd < 0) {
+			for (int y = top - 1; y <= top; ++y) {
+				collision_type_t tile_type = collision_tilemap_get(map, x, y);
+				if (tile_type == COLLISION_AIR) continue;
+
+				Rectangle tile_rect = { x * tile_size, y * tile_size, tile_size, tile_size };
+				if (rectangle_collision(body_rect, tile_rect)) {
+					body->y = tile_rect.y + tile_size + body->height;
+					body->yspd = 0;
+					PlaySound(sounds.bump);
+					return;
+				}
+			}
+		}
+		// down
+		else for (int y = bottom; y <= bottom + 1; ++y) {
+			collision_type_t tile_type = collision_tilemap_get(map, x, y);
+			if (tile_type == COLLISION_AIR) continue;
+
+			Rectangle tile_rect = { x * tile_size, y * tile_size, tile_size, tile_size };
+			if (rectangle_collision(body_rect, tile_rect)) {
+				if (body->yspd > 0) {
+					body->y = tile_rect.y;
+					body->yspd = 0;
+					body->grounded = true;
+					return;
+				}
+			}
+		}
+	}
 }
 
 #pragma endregion
@@ -509,7 +696,7 @@ typedef enum entity_type {
 } entity_type_t;
 
 struct entity {
-	id_t id;
+	entity_id_t id;
 	entity_type_t type;
 	physics_body_t body;
 	bool is_active;
@@ -517,101 +704,65 @@ struct entity {
 	void (*draw)(struct entity*, struct level*, render_context_t* context);
 };
 
-ARRAYLIST_DEFINE(entity_t*, entity_arraylist)
+ARRAYLIST_DEFINE(entity_t*, entityptr)
 
 #pragma endregion
 
-#pragma region Player
+#pragma region Player Struct
 
 struct player {
 	physics_body_t body;
-	float img_index;
+	powerup_t powerup;
+	sprite_t* sprites_index;
+	bool flip_x;
+	float image_index;
 };
 
-void player_init(player_t* player) {
-	physics_body_init(&player->body, 8, 14);
-	player->img_index = 0;
-}
-
-Rectangle player_rectangle(player_t* player) {
-	return (Rectangle) { player->body.x + 8, player->body.y, 16, 32 };
-}
-
 #pragma endregion
 
-#pragma region Tilemap
-
-typedef enum collision_type { COLLISION_AIR, COLLISION_SEMI, COLLISION_SOLID } collision_type_t;
-
-typedef struct tilemap {
-	collision_type_t** data;
-	int width;
-	int height;
-	int tile_size;
-} tilemap_t;
-
-void tilemap_init(tilemap_t* map, int width, int height) {
-	map->width = width;
-	map->height = height;
-	map->tile_size = 16;
-	map->data = malloc(width * sizeof(collision_type_t*));
-	for (int x = 0; x < width; ++x) {
-		map->data[x] = calloc(height, sizeof(collision_type_t));
-	}
-}
-
-void tilemap_free(tilemap_t* map) {
-	for (int x = 0; x < map->width; ++x) {
-		free(map->data[x]);
-	}
-	free(map->data);
-}
-
-inline collision_type_t tilemap_get(tilemap_t* map, int x, int y) {
-	if (x < 0 || y < 0 || x >= map->width || y >= map->height) {
-		return COLLISION_AIR;
-	}
-	return map->data[x][y];
-}
-
-#define tilemap_set(map, x, y, val) map.data[x][y] = val
-
-#pragma endregion
-
-#pragma region Level Init & Free
+#pragma region Level Struct, Init, & Free
 
 struct level {
 	player_t player;
-	entity_arraylist_t entities;
+	entityptr_arraylist_t entities;
 	Color background_color;
 	background_t background;
-	tilemap_t collision_map;
+	collision_tilemap_t collision_map;
 	entity_id_t next_entity_id;
 };
 
 void level_init(level_t* level, const char* background_res, Color background_color, int width, int height) {
+	// entities
 	player_init(&level->player);
-	entity_arraylist_init(&level->entities, 64);
+	entityptr_arraylist_init(&level->entities, 64);
+	level->next_entity_id = 0;
+	
+	// bg
+	background_init(background_res, &level->background, true);
+	level->background.y = -level->background.tex.height + SCREEN_HEIGHT;
 	level->background.clamp_x = false;
 	level->background.clamp_y = true;
-	level->next_entity_id = 0;
-
-	background_init(background_res, &level->background, true);
+	level->background.parallax_x = 0.5f;
+	level->background.parallax_y = 1.0f;
 	level->background_color = background_color;
-	tilemap_init(&level->collision_map, width, height);
 
+	// tilemap
+	collision_tilemap_init(&level->collision_map, width, height);
 	for (int x = 0; x < width; ++x) {
 		for (int y = 0; y < height; ++y) {
 			if (x < 8 && x > 3 && y >= height - 3) {
-				tilemap_set(level->collision_map, x, y, COLLISION_SEMI);
+				collision_tilemap_set(&level->collision_map, x, y, COLLISION_SOLID);
 			} else if (y >= height - 2) {
-				tilemap_set(level->collision_map, x, y, COLLISION_SEMI);
+				collision_tilemap_set(&level->collision_map, x, y, COLLISION_SOLID);
 			} else {
-				tilemap_set(level->collision_map, x, y, COLLISION_AIR);
+				collision_tilemap_set(&level->collision_map, x, y, COLLISION_AIR);
 			}
 		}
-		printf("\n");
 	}
+	collision_tilemap_set(&level->collision_map, 5, 8, COLLISION_SOLID);
+	collision_tilemap_set(&level->collision_map, 6, 8, COLLISION_SOLID);
+	collision_tilemap_set(&level->collision_map, 7, 9, COLLISION_SOLID);
+	collision_tilemap_set(&level->collision_map, 7, 10, COLLISION_SOLID);
 }
 
 void level_free(level_t* level) {
@@ -620,9 +771,9 @@ void level_free(level_t* level) {
 			free(level->entities.data[i]);
 		}
 	}
-	entity_arraylist_free(&level->entities);
+	entityptr_arraylist_free(&level->entities);
 	background_free(&level->background);
-	tilemap_free(&level->collision_map);
+	collision_tilemap_free(&level->collision_map);
 }
 
 #pragma endregion
@@ -698,11 +849,14 @@ void game_draw(game_t* game) {
 	}
 }
 
-void game_start(game_t* game) {
+void game_init(game_t* game) {
 	// start window
 	SetTraceLogLevel(LOG_NONE);
 	InitWindow(SCREEN_WIDTH * 4, SCREEN_HEIGHT * 4, "");
+	InitAudioDevice();
 	SetTargetFPS(60);
+	sounds.bump = LoadSound("assets/sounds/bump.wav");
+	sounds.jump = LoadSound("assets/sounds/jump.wav");
 
 	// initialization would be something like this
 	entity_goomba_t goomba = { {
@@ -717,10 +871,6 @@ void game_start(game_t* game) {
 	// controller set-up
 	game->controller_count = 1;
 	game->controllers = malloc(MAX_CONTROLLERS * sizeof(controller_state_t));
-
-	// first level init
-	game->level = malloc(sizeof(level_t));
-	level_init(game->level, "plains", BLUE_SKY, 20, 14);
 
 	Image atlas_img = GenImageColor(TEXTURE_ATLAS_WIDTH, TEXTURE_ATLAS_HEIGHT, (Color) { 255, 255, 255, 0 });
 	{
@@ -748,6 +898,10 @@ void game_start(game_t* game) {
 
 	ExportImage(atlas_img, "sprite_atlas_dump.png");
 	UnloadImage(atlas_img);
+
+	// first level init
+	game->level = malloc(sizeof(level_t));
+	level_init(game->level, "plains", BLUE_SKY, 20, 14);
 
 	// create rendering surface 
 	RenderTexture2D render_texture = LoadRenderTexture(SCREEN_WIDTH, SCREEN_HEIGHT);
@@ -789,12 +943,8 @@ void game_end(game_t* game) {
 
 void level_update(level_t* level, game_t* game) {
 	player_update(&level->player, level, &game->controllers[0]);
-	/*{
-		entity_t* e = malloc(sizeof(entity_t));
-		entity_arraylist_push(&level->entities, e);
-	}*/
 	for (int i = 0; i < level->entities.count; ++i) {
-		entity_t* e = entity_arraylist_get(&level->entities, i);
+		entity_t* e = entityptr_arraylist_get(&level->entities, i);
 		if (e != NULL) {
 			entity_update(e, level);	// all entity update
 			if (e->update != NULL) {	// uniquely assigned update
@@ -805,10 +955,6 @@ void level_update(level_t* level, game_t* game) {
 }
 
 void level_draw(level_t* level, render_context_t* context) {
-	level->background.parallax_x = 0.5f;
-	level->background.parallax_y = 1.0f;
-	level->background.y = -level->background.tex.height + SCREEN_HEIGHT;
-	level->background.x -= 1.25f;
 	background_draw(&level->background);
 	for (int x = 0; x < level->collision_map.width; ++x) {
 		for (int y = 0; y < level->collision_map.height; ++y) {
@@ -823,60 +969,115 @@ void level_draw(level_t* level, render_context_t* context) {
 			e->update(e, level);
 		}
 	}
-	player_draw(&level->player, context);
+	player_draw(&level->player, level, context);
 }
 
 #pragma endregion
 
-#pragma region Player Update
+#pragma region Player Functions
 
-void player_draw(player_t* player, render_context_t* context) {
-	static int text_val = 0;
-	sprite_t* render_sprite = mario_sprites.jump;
-	player->img_index = (player->body.yspd > 0) ? 1 : 0;
-	if (player->body.y >= SCREEN_HEIGHT - 32) {
-		render_sprite = mario_sprites.idle;
-	}
+void player_init(player_t* player) {
+	physics_body_init(&player->body, 8, 18);
+	player->powerup = POWERUP_BIG;
+	player->sprites_index = mario_sprites.idle;
+	player->image_index = 0;
+	player->flip_x = false;
+}
 
-	Rectangle prect = player_rectangle(player);
-	int tile_size = 16;
-	rectangle_arraylist_t collision_list;
-	rectangle_arraylist_init(&collision_list, 1);
-	int left = prect.x / tile_size, right = (prect.x + prect.width) / tile_size;
-	int top = prect.y / tile_size, bottom = (prect.y + prect.height) / tile_size;
-	for (int x = left - 1; x <= right + 1; ++x) {
-		for (int y = top - 1; y <= bottom + 1; ++y) {
-			rectangle_arraylist_push(&collision_list, (Rectangle) { x * 16, y * 16, 16, 16 });
-		}
-	}
-	for (int i = 0; i < collision_list.capacity; ++i) {
-		Rectangle pos_rect = rectangle_arraylist_get(&collision_list, i);
-		DrawRectanglePro(pos_rect, (Vector2) { 0, 0 }, 0, (Color) { 255, 0, 0, 255 });
-	}
-	printd("%d\n", collision_list.count);
-	rectangle_arraylist_free(&collision_list);
-	DrawRectanglePro(prect, (Vector2) { 0, 0 }, 0, (Color) { 0, 255, 255, 255 });
+inline sprite_t* player_get_sprite(player_t* player) {
+	return (player->sprites_index == NULL) ? NULL : &player->sprites_index[player->powerup];
+}
 
-	if (render_sprite != NULL) {
-		sprite_draw(&render_sprite[POWERUP_BIG], player->img_index, player->body.x, player->body.y, context);
+void player_draw(player_t* player, level_t* level, render_context_t* context) {
+	// render player
+	if (player->sprites_index != NULL) {
+		sprite_t* sprite_index = &player->sprites_index[player->powerup];
+		sprite_draw_pro(sprite_index, player->image_index, player->body.x, player->body.y + 1, sprite_index->width * player->body.origin_x, sprite_index->height * player->body.origin_y, player->flip_x, false, context);
 	}
-	text_draw("WELCOME TO DINOSAUR LAND!    \nIN THIS FAR AWAY LAND, \nMARIO HAS FOUND HIMSELF \nFACE-TO-FACE WITH NEW FRIENDS,     \nAND TERRIFYING ENEMIES!", &fnt_hud, 0, 0, context, (text_val++) / 3.0f);
+	Rectangle r = physics_body_get_rectangle(&player->body);
+	r.x = floorf(r.x); r.y = floorf(r.y);
+	DrawRectanglePro(r, (Vector2) { 0, 0 }, 0, (Color) { 255, 0, 0, 100 });
+	text_draw("MARIO TEST", &fnt_hud, 0, 0, context);
 }
 
 void player_update(player_t* player, level_t* level, controller_state_t* controller) {
-	player->img_index += 0.125f;
-	player->body.grav = 0.3750;
-	if (controller->current.a) {
-		if (!controller->previous.a) {
-			player->body.yspd = -5.0f;
-		} else {
-			player->body.grav = 0.1875;
+	player->image_index += 0.125f;
+	player->body.grav = (player->body.yspd > 0 || player->body.yspd < 0 && !controller->current.a) ? 0.375f : 0.1875f;
+
+	if (player->body.grounded && controller->current.a && !controller->previous.a) {
+		player->body.yspd = -5.0f;
+		PlaySound(sounds.jump);
+	} else if (player->body.yspd > 5.0f) {
+		player->body.yspd = 5.0f;
+	}
+	float h = controller->current.h;
+	static float decel =		0.05f;
+	static float decel_air =	0.0125f;
+	static float accel =		0.0625f;
+	static float turn =			0.125f;
+	static float turn_air =		0.25f;
+	if (h > 0) {
+		if (player->body.xspd < 0) {
+			player->body.xspd += (player->body.grounded) ? turn : turn_air;
+		}
+		else {
+			player->body.xspd += accel;
+		}
+		if (player->body.xspd > 1.25f) {
+			player->body.xspd = 1.25f;
 		}
 	}
-	physics_body_update(&player->body);
+	else if (h < 0) {
+		if (player->body.xspd > 0) {
+			player->body.xspd -= (player->body.grounded) ? turn : turn_air;
+		}
+		else {
+			player->body.xspd -= accel;
+		}
+		if (player->body.xspd < -1.25f) {
+			player->body.xspd = -1.25f;
+		}
+	}
+	else {
+		if (player->body.xspd > 0) {
+			player->body.xspd -= (player->body.grounded) ? decel : decel_air;
+			if (player->body.xspd < 0) {
+				player->body.xspd = 0;
+			}
+		}
+		else if (player->body.xspd < 0) {
+			player->body.xspd += (player->body.grounded) ? decel : decel_air;
+			if (player->body.xspd > 0) {
+				player->body.xspd = 0;
+			}
+		}
+	}
+	// player->body.xspd = controller->current.h * 1.25f;
+	if (player->body.xspd < 0) {
+		player->flip_x = true;
+	} else if (player->body.xspd > 0) {
+		player->flip_x = false;
+	}
 
-	if (player->body.y > SCREEN_HEIGHT - 32) {
-		player->body.y = SCREEN_HEIGHT - 32;
+	player->body.yspd += player->body.grav;
+	player->body.x += player->body.xspd;
+	resolve_collisions_x(&player->body, &level->collision_map);
+	player->body.y += player->body.yspd;
+	resolve_collisions_y(&player->body, &level->collision_map);
+
+	if (!player->body.grounded) {
+		player->sprites_index = mario_sprites.jump;
+		player->image_index = player->body.yspd > 0 ? 1 : 0;
+	}
+	else {
+		if (player->body.xspd != 0) {
+			player->sprites_index = mario_sprites.walk;
+			player->image_index += fabsf(player->body.xspd) / 8.0f;
+		}
+		else {
+			player->sprites_index = mario_sprites.idle;
+			player->image_index = (controller->current.v < 0) ? 1 : 0;
+		}
 	}
 }
 
@@ -884,6 +1085,6 @@ void player_update(player_t* player, level_t* level, controller_state_t* control
 
 int main(int argc, char** argv) {
 	game_t game;
-	game_start(&game);
+	game_init(&game);
 	game_end(&game);
 }
