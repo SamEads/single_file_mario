@@ -763,6 +763,7 @@ void level_init(level_t* level, const char* background_res, Color background_col
 	collision_tilemap_set(&level->collision_map, 6, 8, COLLISION_SOLID);
 	collision_tilemap_set(&level->collision_map, 7, 9, COLLISION_SOLID);
 	collision_tilemap_set(&level->collision_map, 7, 10, COLLISION_SOLID);
+	collision_tilemap_set(&level->collision_map, 7, 7, COLLISION_SOLID);
 }
 
 void level_free(level_t* level) {
@@ -955,7 +956,23 @@ void level_update(level_t* level, game_t* game) {
 }
 
 void level_draw(level_t* level, render_context_t* context) {
+	/*
+	Camera3D camera = { 0 };
+	camera.position = (Vector3){ 0.0f, 0.0f, 0.0f };
+	camera.target = (Vector3){ 0.0f, 0.0f, 1.0f };
+	camera.up = (Vector3){ 0.0f, 1.0f, 0.0f };
+	camera.fovy = 70.0f;
+	camera.projection = CAMERA_PERSPECTIVE;
 	background_draw(&level->background);
+	BeginMode3D(camera);
+	rlPushMatrix();
+	rlTranslatef(0.0f, -0.5f, 0.0f);
+	rlRotatef(15, 1, 0, 0);
+	DrawGrid(10, 1.0f);
+	rlPopMatrix();
+	EndMode3D();
+	*/
+
 	for (int x = 0; x < level->collision_map.width; ++x) {
 		for (int y = 0; y < level->collision_map.height; ++y) {
 			if (level->collision_map.data[x][y] != COLLISION_AIR) {
@@ -970,6 +987,12 @@ void level_draw(level_t* level, render_context_t* context) {
 		}
 	}
 	player_draw(&level->player, level, context);
+
+	/*
+	Vector2 mouse_position = GetMousePosition();
+	mouse_position.x /= 4.0f;
+	mouse_position.y /= 4.0f;
+	*/
 }
 
 #pragma endregion
@@ -1001,41 +1024,78 @@ void player_draw(player_t* player, level_t* level, render_context_t* context) {
 }
 
 void player_update(player_t* player, level_t* level, controller_state_t* controller) {
+	static const float decel = 0.0625f;
+	static const float decel_air = 0.0125f;
+	static const float accel = 0.09375f;
+	static const float turn = 0.15625f;
+	static const float turn_air = 0.15625f;
+	static const float grav_jump = 0.1875f;
+	static const float grav_fall = 0.375f;
+
 	player->image_index += 0.125f;
-	player->body.grav = (player->body.yspd > 0 || player->body.yspd < 0 && !controller->current.a) ? 0.375f : 0.1875f;
+	if (player->body.yspd > 0 || player->body.yspd < 0 && !controller->current.a) {
+		player->body.grav = grav_fall;
+	}
+	else {
+		player->body.grav = grav_jump;
+	}
 
 	if (player->body.grounded && controller->current.a && !controller->previous.a) {
 		player->body.yspd = -5.0f;
 		PlaySound(sounds.jump);
-	} else if (player->body.yspd > 5.0f) {
+	}
+	else if (player->body.yspd > 5.0f) {
 		player->body.yspd = 5.0f;
 	}
+
+	/*
 	float h = controller->current.h;
-	static float decel =		0.05f;
-	static float decel_air =	0.0125f;
-	static float accel =		0.0625f;
-	static float turn =			0.125f;
-	static float turn_air =		0.25f;
-	if (h > 0) {
-		if (player->body.xspd < 0) {
-			player->body.xspd += (player->body.grounded) ? turn : turn_air;
+	int traction = 1;
+	// horizontal max speed changes under these conditions:
+	// (not crouching, and on the ground) OR
+	// (not on the ground, and ((xspd >= 0 & h > 0) | (xspd <= 0 & h < 0))
+	if ((player->body.grounded) ||
+		((!player->body.grounded) && ((player->body.xspd >= 0 && h > 0) || (player->body.xspd <= 0 && h < 0)))) {
+		if (fabsf(player->body.xspd) >= 1.25f && controller->current.b) {
+			player->body.xspd_max = 2.25f;
 		}
 		else {
-			player->body.xspd += accel;
-		}
-		if (player->body.xspd > 1.25f) {
-			player->body.xspd = 1.25f;
+			player->body.xspd_max = 1.25f;
 		}
 	}
-	else if (h < 0) {
-		if (player->body.xspd > 0) {
-			player->body.xspd -= (player->body.grounded) ? turn : turn_air;
+	else {
+		player->body.xspd_max = 0.0f;
+	}
+
+	// player is moving left or right
+	if (h != 0 && (h * player->body.xspd < player->body.xspd_max)) {
+		// forward acceleration just increments by the acceleration value
+		if (h * player->body.xspd >= 0) {
+			player->body.xspd += h * accel;
 		}
+		// skidding
 		else {
-			player->body.xspd -= accel;
-		}
-		if (player->body.xspd < -1.25f) {
-			player->body.xspd = -1.25f;
+			// ground skid
+			if (player->body.grounded) {
+				// multiplies the turn speed by an amount
+				float skid_factor = 1.0f;
+				if (fabsf(player->body.xspd) <= 1.25f) {
+					skid_factor = 1.0f;
+				}
+				else if (fabsf(player->body.xspd) <= 2.25f) {
+					skid_factor = 2.0f;
+				}
+				else if (fabsf(player->body.xspd) > 2.25f) {
+					skid_factor = 4.0f;
+				}
+				player->body.xspd += h * ((turn * skid_factor) * traction);
+
+			}
+			else if (h * player->body.xspd > -1.25f) {
+				player->body.xspd += h * turn;
+			}
+			else
+				player->body.xspd += h * (turn_air * 2);
 		}
 	}
 	else {
@@ -1052,7 +1112,18 @@ void player_update(player_t* player, level_t* level, controller_state_t* control
 			}
 		}
 	}
-	// player->body.xspd = controller->current.h * 1.25f;
+
+	// a sign function could concat these functions rly easily
+	if (player->body.grounded) {
+		if (player->body.xspd > player->body.xspd_max) {
+			player->body.xspd = player->body.xspd_max;
+		}
+		else if (player->body.xspd < -player->body.xspd_max) {
+			player->body.xspd = -player->body.xspd_max;
+		}
+	}
+	*/
+
 	if (player->body.xspd < 0) {
 		player->flip_x = true;
 	} else if (player->body.xspd > 0) {
