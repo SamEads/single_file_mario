@@ -21,9 +21,15 @@ struct sounds {
 typedef long entity_id_t;
 
 // resource related defines
-#define SPRITES_PATH 		"assets/sprites"
-#define SOUNDS_PATH 		"assets/sounds"
-#define BACKGROUNDS_PATH 	"assets/backgrounds"
+#define WINDOW_CAPTION 			"Super Mario World"
+#ifdef DEBUG
+#define WINDOW_CAPTION_DEBUG	" [DEBUG]"
+#else
+#define WINDOW_CAPTION_DEBUG 	""
+#endif
+#define SPRITES_PATH 			"assets/sprites"
+#define SOUNDS_PATH 			"assets/sounds"
+#define BACKGROUNDS_PATH 		"assets/backgrounds"
 #define MAX_PATH_LEN 256
 
 // game related defines
@@ -92,29 +98,10 @@ void player_draw(player_t*, level_t*, render_context_t*);
 
 #pragma region Mathstuffs
 
-inline float clampf(float val, float min, float max) {
-	if (val < min) {
-		return min;
-	}
-	return (max > val) ? val : max;
-}
-
-int clamp(int val, int min, int max) {
-	if (val < min) {
-		return min;
-	}
-	return (max > val) ? val : max;
-}
-double clampd(double val, double min, double max) {
-	if (val < min) {
-		return min;
-	}
-	return (max > val) ? val : max;
-}
-
-int rand_int(int min, int max) {
-	return min + rand() / (RAND_MAX / (max - min + 1) + 1);
-}
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#define CLAMP(v, a, b) (MAX(MIN(v, b), a))
+#define RAND_INT(min, max) (min + rand() / (RAND_MAX / (max - min + 1) + 1))
 
 #pragma endregion
 
@@ -173,43 +160,56 @@ ARRAYLIST_DEFINE(Rectangle, rectangle)
 
 typedef enum collision_type { COLLISION_AIR, COLLISION_SEMI, COLLISION_SOLID } collision_type_t;
 
-#define TILEMAP_DEFINE(type, type_name, default_val) \
-typedef struct type_name##_tilemap { \
-	type** data; \
-	int width; \
-	int height; \
-	int tile_size; \
-} type_name##_tilemap_t; \
-void type_name##_tilemap_init(type_name##_tilemap_t* map, int width, int height) { \
-	printd("Type: " #type ", name: " #type_name "\n"); \
-	map->width = width; \
-	map->height = height; \
-	map->tile_size = 16; \
-	map->data = malloc(width * sizeof(type*)); \
-	for (int x = 0; x < width; ++x) { \
-		map->data[x] = calloc(height, sizeof(type)); \
-	} \
-} \
-void type_name##_tilemap_free(type_name##_tilemap_t* map) { \
-	for (int x = 0; x < map->width; ++x) { \
-		free(map->data[x]); \
-	} \
-	free(map->data); \
-} \
-type type_name##_tilemap_get(type_name##_tilemap_t* map, int x, int y) { \
-	if (x < 0 || y < 0 || x >= map->width || y >= map->height) { \
-		return default_val; \
-	} \
-	return map->data[x][y]; \
-} \
-void type_name##_tilemap_set(type_name##_tilemap_t* map, int x, int y, type val) { \
-	if (x < 0 || y < 0 || x >= map->width || y >= map->height) { \
-		return; \
-	} \
-	map->data[x][y] = val; \
+typedef struct tile {
+	collision_type_t collision;
+} tile_t;
+
+typedef struct tilemap {
+	tile_t** data;
+	int width;
+	int height;
+	int tile_size;
+} tilemap_t;
+
+void tilemap_init(tilemap_t* map, int width, int height, int tile_size) {
+	map->width = width;
+	map->height = height;
+	map->tile_size = tile_size;
+	map->data = malloc(width * sizeof(tilemap_t*));
+	for (int x = 0; x < width; ++x) {
+		map->data[x] = calloc(height, sizeof(tilemap_t));
+	}
 }
 
-TILEMAP_DEFINE(collision_type_t, collision, COLLISION_AIR)
+void tilemap_free(tilemap_t* map) {
+	for (int x = 0; x < map->width; ++x) {
+		free(map->data[x]);
+	}
+	free(map->data);
+}
+
+tile_t tilemap_get(tilemap_t* map, int x, int y) {
+	if (x < 0 || y < 0 || x >= map->width || y >= map->height) {
+		return (tile_t) {
+			.collision = COLLISION_AIR
+		};
+	}
+	return map->data[x][y];
+}
+
+Rectangle tilemap_get_rectangle(tilemap_t* map, int x, int y) {
+	if (x < 0 || y < 0 || x >= map->width || y >= map->height) {
+		return (Rectangle) { 0, 0, 0, 0 };
+	}
+	return (Rectangle) { x * (float)map->tile_size, y * (float)map->tile_size, (float)map->tile_size, (float)map->tile_size };
+}
+
+void tilemap_set(tilemap_t* map, int x, int y, tile_t val) {
+	if (x < 0 || y < 0 || x >= map->width || y >= map->height) {
+		return;
+	}
+	map->data[x][y] = val;
+}
 
 #pragma endregion
 
@@ -638,7 +638,7 @@ bool rectangle_collision_list(Rectangle base_rect, Rectangle* recs, int num_rect
 	return false;
 }
 
-void resolve_collisions_x(physics_body_t* body, collision_tilemap_t* map) {
+void resolve_collisions_x(physics_body_t* body, tilemap_t* map) {
 	Rectangle body_rect = physics_body_get_rectangle(body);
 	int tile_size = map->tile_size;
 
@@ -648,11 +648,12 @@ void resolve_collisions_x(physics_body_t* body, collision_tilemap_t* map) {
 	for (int y = top - 1; y <= bottom + 1; ++y) {
 		// right
 		if (body->xspd > 0) {
+			// vertical line on right of physbody
 			Rectangle side_player_rect = { body_rect.x + body_rect.width, body_rect.y, 0, body_rect.height };
 			for (int x = right; x <= right + 1; ++x) {
-				collision_type_t tile_type = collision_tilemap_get(map, x, y);
+				collision_type_t tile_type = tilemap_get(map, x, y).collision;
 				if (tile_type == COLLISION_SOLID) {
-					Rectangle tile_rect = { x * tile_size, y * tile_size, tile_size, tile_size };
+					Rectangle tile_rect = tilemap_get_rectangle(map, x, y);
 					if (rectangle_collision(side_player_rect, tile_rect)) {
 						body->x = tile_rect.x - body_rect.width + (body->width * body->origin_x);
 						body->xspd = 0;
@@ -663,11 +664,12 @@ void resolve_collisions_x(physics_body_t* body, collision_tilemap_t* map) {
 		}
 		// left
 		else if (body->xspd < 0) {
+			// vertical line on left of physbody
 			Rectangle side_player_rect = { body_rect.x, body_rect.y, 0, body_rect.height };
 			for (int x = left - 1; x <= left; ++x) {
-				collision_type_t tile_type = collision_tilemap_get(map, x, y);
+				collision_type_t tile_type = tilemap_get(map, x, y).collision;
 				if (tile_type == COLLISION_SOLID) {
-					Rectangle tile_rect = { x * tile_size, y * tile_size, tile_size, tile_size };
+					Rectangle tile_rect = tilemap_get_rectangle(map, x, y);
 					if (rectangle_collision(side_player_rect, tile_rect)) {
 						body->x = tile_rect.x + tile_size + (body->width * body->origin_x);
 						body->xspd = 0;
@@ -678,7 +680,7 @@ void resolve_collisions_x(physics_body_t* body, collision_tilemap_t* map) {
 	}
 }
 
-void resolve_collisions_y(physics_body_t* body, collision_tilemap_t* map) {
+void resolve_collisions_y(physics_body_t* body, tilemap_t* map) {
 	Rectangle body_rect = physics_body_get_rectangle(body);
 	int tile_size = map->tile_size;
 	int left = body_rect.x / tile_size, right = (body_rect.x + body_rect.width) / tile_size;
@@ -689,8 +691,9 @@ void resolve_collisions_y(physics_body_t* body, collision_tilemap_t* map) {
 		// up
 		if (body->yspd < 0) {
 			for (int y = top - 1; y <= top; ++y) {
-				collision_type_t tile_type = collision_tilemap_get(map, x, y);
+				collision_type_t tile_type = tilemap_get(map, x, y).collision;
 				if (tile_type == COLLISION_SOLID) {
+					// horizontal line on top of physbody
 					Rectangle tile_rect = { x * tile_size, y * tile_size, tile_size, tile_size };
 					if (rectangle_collision(body_rect, tile_rect)) {
 						body->y = tile_rect.y + tile_size + (body->height * body->origin_y);
@@ -704,7 +707,8 @@ void resolve_collisions_y(physics_body_t* body, collision_tilemap_t* map) {
 		// down
 		else if (body->yspd > 0) {
 			for (int y = bottom; y <= bottom + 1; ++y) {
-				collision_type_t tile_type = collision_tilemap_get(map, x, y);
+				// horizontal line on bottom of physbody
+				collision_type_t tile_type = tilemap_get(map, x, y).collision;
 				if (tile_type == COLLISION_SOLID || tile_type == COLLISION_SEMI) {
 					Rectangle tile_rect = { x * tile_size, y * tile_size, tile_size, tile_size };
 					if (rectangle_collision(body_rect, tile_rect)) {
@@ -748,9 +752,9 @@ ARRAYLIST_DEFINE(entity_t*, entityptr)
 
 struct player {
 	physics_body_t body;
-	powerup_t powerup;
 	sprite_t* sprites_index;
 	bool flip_x;
+	bool is_big;
 	float image_index;
 };
 
@@ -763,7 +767,7 @@ struct level {
 	entityptr_arraylist_t entities;
 	Color background_color;
 	background_t background;
-	collision_tilemap_t collision_map;
+	tilemap_t collision_map;
 	entity_id_t next_entity_id;
 	int camera_x;
 	int camera_y;
@@ -785,34 +789,34 @@ void level_init(level_t* level, const char* background_res, Color background_col
 	level->background_color = background_color;
 
 	// tilemap (temporary, oh my god. delegate to a file champ)
-	collision_tilemap_init(&level->collision_map, width, height);
+	tilemap_init(&level->collision_map, width, height, 16);
 	for (int i = 0; i <= 7; ++i) {
-		collision_tilemap_set(&level->collision_map, i, 14, COLLISION_SOLID);
+		tilemap_set(&level->collision_map, i, 14, (tile_t) { COLLISION_SOLID });
 	}
 	for (int i = 8; i <= 12; ++i) {
-		collision_tilemap_set(&level->collision_map, i, 15, COLLISION_SOLID);
+		tilemap_set(&level->collision_map, i, 15, (tile_t) { COLLISION_SOLID });
 	}
 	for (int i = 13; i <= 14; ++i) {
-		collision_tilemap_set(&level->collision_map, i, 14, COLLISION_SOLID);
+		tilemap_set(&level->collision_map, i, 14, (tile_t) { COLLISION_SOLID });
 	}
-	collision_tilemap_set(&level->collision_map, 15, 13, COLLISION_SOLID);
-	collision_tilemap_set(&level->collision_map, 15, 12, COLLISION_SOLID);
+	tilemap_set(&level->collision_map, 15, 13, (tile_t) { COLLISION_SOLID });
+	tilemap_set(&level->collision_map, 15, 12, (tile_t) { COLLISION_SOLID });
 	for (int i = 17; i <= 19; ++i) {
-		collision_tilemap_set(&level->collision_map, i, 11, COLLISION_SOLID);
+		tilemap_set(&level->collision_map, i, 11, (tile_t) { COLLISION_SOLID });
 	}
-	collision_tilemap_set(&level->collision_map, 16, 12, COLLISION_SOLID);
+	tilemap_set(&level->collision_map, 16, 12, (tile_t) { COLLISION_SOLID });
 	for (int i = 20; i <= 23; ++i) {
-		collision_tilemap_set(&level->collision_map, i, 10, COLLISION_SOLID);
+		tilemap_set(&level->collision_map, i, 10, (tile_t) { COLLISION_SOLID });
 	}
-	collision_tilemap_set(&level->collision_map, 0, 10, COLLISION_SOLID);
+	tilemap_set(&level->collision_map, 0, 10, (tile_t) { COLLISION_SOLID });
 	for (int i = 2; i <= 5; ++i) {
-		collision_tilemap_set(&level->collision_map, i, 9, COLLISION_SOLID);
+		tilemap_set(&level->collision_map, i, 9, (tile_t) { COLLISION_SOLID });
 	}
 	for (int i = 6; i <= 10; ++i) {
-		collision_tilemap_set(&level->collision_map, i, 8, COLLISION_SOLID);
+		tilemap_set(&level->collision_map, i, 8, (tile_t) { COLLISION_SOLID });
 	}
 	for (int i = 5; i <= 7; ++i) {
-		collision_tilemap_set(&level->collision_map, 10, i, COLLISION_SOLID);
+		tilemap_set(&level->collision_map, 10, i, (tile_t) { COLLISION_SOLID });
 	}
 }
 
@@ -826,7 +830,7 @@ void level_free(level_t* level) {
 	}
 	entityptr_arraylist_free(&level->entities);
 	background_free(&level->background);
-	collision_tilemap_free(&level->collision_map);
+	tilemap_free(&level->collision_map);
 }
 
 #pragma endregion
@@ -902,10 +906,13 @@ void game_draw(game_t* game) {
 	}
 }
 
-void game_init(game_t* game) {
+void game_init(const char* window_title, game_t* game) {
+	// rng
+	srand(0);
+
 	// start window
 	SetTraceLogLevel(LOG_NONE);
-	InitWindow(SCREEN_WIDTH * 4, SCREEN_HEIGHT * 4, "");
+	InitWindow(SCREEN_WIDTH * 4, SCREEN_HEIGHT * 4, window_title);
 	InitAudioDevice();
 	SetTargetFPS(60);
 	sounds.bump = LoadSound("assets/sounds/bump.wav");
@@ -1047,15 +1054,39 @@ void level_update(level_t* level, game_t* game) {
 	level->camera_y = cam_y - half_height;
 }
 
+double distance(double x1, double y1, double x2, double y2) {
+    double square_difference_x = (x2 - x1) * (x2 - x1);
+    double square_difference_y = (y2 - y1) * (y2 - y1);
+    double sum = square_difference_x + square_difference_y;
+    double value = sqrt(sum);
+    return value;
+}
+
 void level_draw(level_t* level, render_context_t* context) {
 	level->background.x = -level->camera_x;
 	background_draw(&level->background);
-	DrawTexture(cheat_tileset, -level->camera_x, -level->camera_y, (Color){ 255, 255, 255, 255 });
+	DrawTexture(cheat_tileset, -level->camera_x, -level->camera_y, WHITE);
+
+	int tile_size = level->collision_map.tile_size;
+	int cam_tile_x1 = level->camera_x / level->collision_map.tile_size, cam_tile_x2 = (level->camera_x + SCREEN_WIDTH) / (float)tile_size;
+	int cam_tile_y1 = level->camera_y / level->collision_map.tile_size, cam_tile_y2 = (level->camera_y + SCREEN_HEIGHT) / (float)tile_size;
+
+	BeginBlendMode(BLEND_ADDITIVE);
+	for (int i = cam_tile_x1; i <= cam_tile_x2; ++i) {
+		for (int j = cam_tile_y1; j <= cam_tile_y2; ++j) {
+			collision_type_t tile_type = tilemap_get(&level->collision_map, i, j).collision;
+			if (tile_type != COLLISION_AIR) {
+				float alpha = 1.0f - CLAMP(distance(level->player.body.x, level->player.body.y, (i * tile_size) + (tile_size / 2.0f), (j * tile_size) + (tile_size / 2.0f)) / 64.0f, 0.0f, 1.0f);
+				DrawRectangle((i * tile_size) - level->camera_x, (j * tile_size) - level->camera_y, tile_size, tile_size, (Color) { 0, 128, 255, (const char)((alpha * 128.0f)) });
+			}
+		}
+	}
+	EndBlendMode();
 
 	for (int i = 0; i < level->entities.count; ++i) {
 		entity_t* e = level->entities.data[i];
 		if (e != NULL && e->update != NULL) {
-			e->update(e, level);
+			e->draw(e, level, context);
 		}
 	}
 
@@ -1068,14 +1099,14 @@ void level_draw(level_t* level, render_context_t* context) {
 
 void player_init(player_t* player) {
 	physics_body_init(&player->body, 8, 18);
-	player->powerup = POWERUP_BIG;
+	player->is_big = true;
 	player->sprites_index = mario_sprites.idle;
 	player->image_index = 0;
 	player->flip_x = false;
 }
 
 inline sprite_t* player_get_sprite(player_t* player) {
-	return (player->sprites_index == NULL) ? NULL : &player->sprites_index[player->powerup];
+	return (player->sprites_index == NULL) ? NULL : &player->sprites_index[player->is_big];
 }
 
 void player_animate(player_t* player, controller_state_t* controller) {
@@ -1106,7 +1137,7 @@ void player_animate(player_t* player, controller_state_t* controller) {
 
 void player_draw(player_t* player, level_t* level, render_context_t* context) {
 	if (player->sprites_index != NULL) {
-		sprite_t* sprite_index = &player->sprites_index[player->powerup];
+		sprite_t* sprite_index = &player->sprites_index[player->is_big];
 		sprite_draw_pro(sprite_index, player->image_index, player->body.x - level->camera_x, player->body.y + 1 - level->camera_y, sprite_index->width * player->body.origin_x, sprite_index->height * player->body.origin_y, player->flip_x, false, context);
 	}
 }
@@ -1203,9 +1234,11 @@ void player_update(player_t* player, level_t* level, controller_state_t* control
 
 	// limit player speed on X and Y axis
 	if (player->body.grounded) {
-		player->body.xspd = clampf(player->body.xspd, -player->body.xspd_max, player->body.xspd_max);
+		player->body.xspd = CLAMP(player->body.xspd, -player->body.xspd_max, player->body.xspd_max);
 	}
-	player->body.yspd = min(player->body.yspd, 5.0f);
+	if (player->body.yspd > 5.0f) {
+		player->body.yspd = 5.0f;
+	}
 
 	// apply velocity and collisions
 	player->body.yspd += player->body.grav;
@@ -1221,6 +1254,6 @@ void player_update(player_t* player, level_t* level, controller_state_t* control
 
 int main(int argc, char** argv) {
 	game_t game;
-	game_init(&game);
+	game_init(WINDOW_CAPTION WINDOW_CAPTION_DEBUG, &game);
 	game_end(&game);
 }
