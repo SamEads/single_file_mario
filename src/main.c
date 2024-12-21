@@ -84,7 +84,27 @@ void player_draw(player_t*, level_t*, render_context_t*);
 
 #pragma endregion
 
-#pragma region Random
+#pragma region Mathstuffs
+
+inline float clampf(float val, float min, float max) {
+	if (val < min) {
+		return min;
+	}
+	return (max > val) ? val : max;
+}
+
+int clamp(int val, int min, int max) {
+	if (val < min) {
+		return min;
+	}
+	return (max > val) ? val : max;
+}
+double clampd(double val, double min, double max) {
+	if (val < min) {
+		return min;
+	}
+	return (max > val) ? val : max;
+}
 
 int rand_int(int min, int max) {
 	return min + rand() / (RAND_MAX / (max - min + 1) + 1);
@@ -111,18 +131,18 @@ void path_index(const char* src_loc, char* dest_loc) {
 
 #pragma region Array List
 
-#define ARRAYLIST_DEFINE(type, signifier) \
-typedef struct signifier { type* data; int count; int capacity; } signifier##_arraylist_t; \
-void signifier##_arraylist_init(signifier##_arraylist_t* list, int initial_capacity) { \
+#define ARRAYLIST_DEFINE(type, type_name) \
+typedef struct type_name { type* data; int count; int capacity; } type_name##_arraylist_t; \
+void type_name##_arraylist_init(type_name##_arraylist_t* list, int initial_capacity) { \
     list->count = 0; \
     list->capacity = initial_capacity; \
     list->data = malloc(list->capacity * sizeof(type)); \
 } \
-void signifier##_arraylist_free(signifier##_arraylist_t* list) { \
+void type_name##_arraylist_free(type_name##_arraylist_t* list) { \
     list->count = list->capacity = 0; \
     free(list->data); \
 } \
-void signifier##_arraylist_push(signifier##_arraylist_t* list, type data) { \
+void type_name##_arraylist_push(type_name##_arraylist_t* list, type data) { \
     if (list->count >= list->capacity) { \
         list->capacity *= ARRAYLIST_SCALE_FACTOR; \
         list->data = realloc(list->data, list->capacity * sizeof(type)); \
@@ -130,10 +150,10 @@ void signifier##_arraylist_push(signifier##_arraylist_t* list, type data) { \
     list->data[list->count] = data; \
     list->count++; \
 } \
-type signifier##_arraylist_get(signifier##_arraylist_t* list, int index) { \
+type type_name##_arraylist_get(type_name##_arraylist_t* list, int index) { \
     return (index < 0 || index >= list->count) ? (type){ 0 } : list->data[index]; \
 } \
-void signifier##_arraylist_remove(signifier##_arraylist_t* list, int index) { \
+void type_name##_arraylist_remove(type_name##_arraylist_t* list, int index) { \
     if (index < 0 || index >= list->count) return; \
     for (int i = index; i < list->count - 1; i++) list->data[i] = list->data[i + 1]; /* pushes data to the left */ \
     --list->count; \
@@ -147,14 +167,14 @@ ARRAYLIST_DEFINE(Rectangle, rectangle)
 
 typedef enum collision_type { COLLISION_AIR, COLLISION_SEMI, COLLISION_SOLID } collision_type_t;
 
-#define TILEMAP_DEFINE(type, signifier, default_val) \
-typedef struct signifier##_tilemap { \
+#define TILEMAP_DEFINE(type, type_name, default_val) \
+typedef struct type_name##_tilemap { \
 	type** data; \
 	int width; \
 	int height; \
 	int tile_size; \
-} signifier##_tilemap_t; \
-void signifier##_tilemap_init(signifier##_tilemap_t* map, int width, int height) { \
+} type_name##_tilemap_t; \
+void type_name##_tilemap_init(type_name##_tilemap_t* map, int width, int height) { \
 	map->width = width; \
 	map->height = height; \
 	map->tile_size = 16; \
@@ -163,19 +183,19 @@ void signifier##_tilemap_init(signifier##_tilemap_t* map, int width, int height)
 		map->data[x] = calloc(height, sizeof(type)); \
 	} \
 } \
-void signifier##_tilemap_free(signifier##_tilemap_t* map) { \
+void type_name##_tilemap_free(type_name##_tilemap_t* map) { \
 	for (int x = 0; x < map->width; ++x) { \
 		free(map->data[x]); \
 	} \
 	free(map->data); \
 } \
-inline type signifier##_tilemap_get(signifier##_tilemap_t* map, int x, int y) { \
+inline type type_name##_tilemap_get(type_name##_tilemap_t* map, int x, int y) { \
 	if (x < 0 || y < 0 || x >= map->width || y >= map->height) { \
 		return default_val; \
 	} \
 	return map->data[x][y]; \
 } \
-inline void signifier##_tilemap_set(signifier##_tilemap_t* map, int x, int y, type val) { \
+inline void type_name##_tilemap_set(type_name##_tilemap_t* map, int x, int y, type val) { \
 	map->data[x][y] = val; \
 }
 
@@ -524,6 +544,8 @@ struct mario_sprites {
 	sprite_t slide[2];
 } mario_sprites;
 
+Texture2D cheat_tileset;
+
 #pragma endregion
 
 #pragma region Physics & Collision
@@ -729,6 +751,8 @@ struct level {
 	background_t background;
 	collision_tilemap_t collision_map;
 	entity_id_t next_entity_id;
+	int camera_x;
+	int camera_y;
 };
 
 void level_init(level_t* level, const char* background_res, Color background_color, int width, int height) {
@@ -746,30 +770,44 @@ void level_init(level_t* level, const char* background_res, Color background_col
 	level->background.parallax_y = 1.0f;
 	level->background_color = background_color;
 
-	// tilemap
+	// tilemap (temporary, oh my god. delegate to a file champ)
 	collision_tilemap_init(&level->collision_map, width, height);
-	for (int x = 0; x < width; ++x) {
-		for (int y = 0; y < height; ++y) {
-			if (x < 8 && x > 3 && y >= height - 3) {
-				collision_tilemap_set(&level->collision_map, x, y, COLLISION_SOLID);
-			} else if (y >= height - 2) {
-				collision_tilemap_set(&level->collision_map, x, y, COLLISION_SOLID);
-			} else {
-				collision_tilemap_set(&level->collision_map, x, y, COLLISION_AIR);
-			}
-		}
+	for (int i = 0; i <= 7; ++i) {
+		collision_tilemap_set(&level->collision_map, i, 14, COLLISION_SOLID);
 	}
-	collision_tilemap_set(&level->collision_map, 5, 8, COLLISION_SOLID);
-	collision_tilemap_set(&level->collision_map, 6, 8, COLLISION_SOLID);
-	collision_tilemap_set(&level->collision_map, 7, 9, COLLISION_SOLID);
-	collision_tilemap_set(&level->collision_map, 7, 10, COLLISION_SOLID);
-	collision_tilemap_set(&level->collision_map, 7, 7, COLLISION_SOLID);
+	for (int i = 8; i <= 12; ++i) {
+		collision_tilemap_set(&level->collision_map, i, 15, COLLISION_SOLID);
+	}
+	for (int i = 13; i <= 14; ++i) {
+		collision_tilemap_set(&level->collision_map, i, 14, COLLISION_SOLID);
+	}
+	collision_tilemap_set(&level->collision_map, 15, 13, COLLISION_SOLID);
+	collision_tilemap_set(&level->collision_map, 15, 12, COLLISION_SOLID);
+	for (int i = 17; i <= 19; ++i) {
+		collision_tilemap_set(&level->collision_map, i, 11, COLLISION_SOLID);
+	}
+	collision_tilemap_set(&level->collision_map, 16, 12, COLLISION_SOLID);
+	for (int i = 20; i <= 23; ++i) {
+		collision_tilemap_set(&level->collision_map, i, 10, COLLISION_SOLID);
+	}
+	collision_tilemap_set(&level->collision_map, 0, 10, COLLISION_SOLID);
+	for (int i = 2; i <= 5; ++i) {
+		collision_tilemap_set(&level->collision_map, i, 9, COLLISION_SOLID);
+	}
+	for (int i = 6; i <= 10; ++i) {
+		collision_tilemap_set(&level->collision_map, i, 8, COLLISION_SOLID);
+	}
+	for (int i = 5; i <= 7; ++i) {
+		collision_tilemap_set(&level->collision_map, 10, i, COLLISION_SOLID);
+	}
 }
 
 void level_free(level_t* level) {
-	for (int i = 0; i < level->entities.count; ++i) {
-		if (level->entities.data[i] != NULL) {
-			free(level->entities.data[i]);
+	if (level->entities.data != NULL) {
+		for (int i = 0; i < level->entities.count; ++i) {
+			if (level->entities.data[i] != NULL) {
+				free(level->entities.data[i]);
+			}
 		}
 	}
 	entityptr_arraylist_free(&level->entities);
@@ -791,7 +829,7 @@ void entity_init(entity_t* entity, entity_type_t type, level_t* level, int width
 }
 
 void entity_update(entity_t* entity, level_t* level) {
-
+	// foobuh barfew lorem ipsum sum checksum ugugghh
 }
 
 int compare_entities(const void* a, const void* b) {
@@ -859,7 +897,7 @@ void game_init(game_t* game) {
 	sounds.bump = LoadSound("assets/sounds/bump.wav");
 	sounds.jump = LoadSound("assets/sounds/jump.wav");
 
-	// initialization would be something like this
+	// initialization would be something like this for an entity
 	entity_goomba_t goomba = { {
 		.id = 1,
 		.type = ENTITY_GOOMBA,
@@ -873,6 +911,8 @@ void game_init(game_t* game) {
 	game->controller_count = 1;
 	game->controllers = malloc(MAX_CONTROLLERS * sizeof(controller_state_t));
 
+	// atlas image
+	// todo: asset loading automation!
 	Image atlas_img = GenImageColor(TEXTURE_ATLAS_WIDTH, TEXTURE_ATLAS_HEIGHT, (Color) { 255, 255, 255, 0 });
 	{
 		stbrp_context rect_packer;
@@ -883,14 +923,18 @@ void game_init(game_t* game) {
 		sprite_init("mario.walk_small", &mario_sprites.walk[POWERUP_SMALL], &atlas_img, &rect_packer);
 		sprite_init("mario.run_small", &mario_sprites.run[POWERUP_SMALL], &atlas_img, &rect_packer);
 		sprite_init("mario.jump_small", &mario_sprites.jump[POWERUP_SMALL], &atlas_img, &rect_packer);
+		sprite_init("mario.skid_small", &mario_sprites.skid[POWERUP_SMALL], &atlas_img, &rect_packer);
 
 		sprite_init("mario.idle_big", &mario_sprites.idle[POWERUP_BIG], &atlas_img, &rect_packer);
 		sprite_init("mario.walk_big", &mario_sprites.walk[POWERUP_BIG], &atlas_img, &rect_packer);
 		sprite_init("mario.run_big", &mario_sprites.run[POWERUP_BIG], &atlas_img, &rect_packer);
 		sprite_init("mario.jump_big", &mario_sprites.jump[POWERUP_BIG], &atlas_img, &rect_packer);
+		sprite_init("mario.skid_big", &mario_sprites.skid[POWERUP_BIG], &atlas_img, &rect_packer);
 
 		font_init("font.hud", "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.,*-!@|=:", &fnt_hud, &atlas_img, &rect_packer);
 		fnt_hud.spacing = 0;
+
+		cheat_tileset = LoadTexture("assets/tiles/cheat.png");
 
 		free(n);
 	}
@@ -902,7 +946,7 @@ void game_init(game_t* game) {
 
 	// first level init
 	game->level = malloc(sizeof(level_t));
-	level_init(game->level, "plains", BLUE_SKY, 20, 14);
+	level_init(game->level, "cave", (Color) { 0, 0, 0, 255 }, 24, 16);
 
 	// create rendering surface 
 	RenderTexture2D render_texture = LoadRenderTexture(SCREEN_WIDTH, SCREEN_HEIGHT);
@@ -943,7 +987,10 @@ void game_end(game_t* game) {
 #pragma region Level Update & Draw
 
 void level_update(level_t* level, game_t* game) {
+	// update player before entities
 	player_update(&level->player, level, &game->controllers[0]);
+	
+	// cycle thru entities & run their updates
 	for (int i = 0; i < level->entities.count; ++i) {
 		entity_t* e = entityptr_arraylist_get(&level->entities, i);
 		if (e != NULL) {
@@ -953,33 +1000,44 @@ void level_update(level_t* level, game_t* game) {
 			}
 		}
 	}
+
+	level->camera_x = level->player.body.x;
+	level->camera_y = level->player.body.y;
+
+	// camera update
+	int cam_x = (int)level->camera_x;
+	int cam_y = (int)level->camera_y;
+
+	int lw = level->collision_map.width * level->collision_map.tile_size;
+	int lh = level->collision_map.height * level->collision_map.tile_size;
+
+	// clamp to level bounds
+	int half_width = SCREEN_WIDTH / 2;
+	int half_height = SCREEN_HEIGHT / 2;
+	// x clamp
+	if (cam_x < half_width) {
+		cam_x = half_width;
+	}
+	else if (cam_x > lw - half_width) {
+		cam_x = lw - half_width;
+	}
+	// y clamp
+	if (cam_y < half_height) {
+		cam_y = half_height;
+	}
+	else if (cam_y > lh - half_height) {
+		cam_y = lh - half_height;
+	}
+
+	level->camera_x = cam_x - half_width;
+	level->camera_y = cam_y - half_height;
 }
 
 void level_draw(level_t* level, render_context_t* context) {
-	/*
-	Camera3D camera = { 0 };
-	camera.position = (Vector3){ 0.0f, 0.0f, 0.0f };
-	camera.target = (Vector3){ 0.0f, 0.0f, 1.0f };
-	camera.up = (Vector3){ 0.0f, 1.0f, 0.0f };
-	camera.fovy = 70.0f;
-	camera.projection = CAMERA_PERSPECTIVE;
+	level->background.x = -level->camera_x;
 	background_draw(&level->background);
-	BeginMode3D(camera);
-	rlPushMatrix();
-	rlTranslatef(0.0f, -0.5f, 0.0f);
-	rlRotatef(15, 1, 0, 0);
-	DrawGrid(10, 1.0f);
-	rlPopMatrix();
-	EndMode3D();
-	*/
+	DrawTexture(cheat_tileset, -level->camera_x, -level->camera_y, (Color){ 255, 255, 255, 255 });
 
-	for (int x = 0; x < level->collision_map.width; ++x) {
-		for (int y = 0; y < level->collision_map.height; ++y) {
-			if (level->collision_map.data[x][y] != COLLISION_AIR) {
-				DrawRectangle(x * 16, y * 16, 16, 16, (Color) { 255, 128, 0, 190 });
-			}
-		}
-	}
 	for (int i = 0; i < level->entities.count; ++i) {
 		entity_t* e = level->entities.data[i];
 		if (e != NULL && e->update != NULL) {
@@ -988,11 +1046,11 @@ void level_draw(level_t* level, render_context_t* context) {
 	}
 	player_draw(&level->player, level, context);
 
-	/*
-	Vector2 mouse_position = GetMousePosition();
-	mouse_position.x /= 4.0f;
-	mouse_position.y /= 4.0f;
-	*/
+	char dtr[512];
+	snprintf(dtr, 512, "PX:%d,PY:%d", (int)(level->player.body.x), (int)(level->player.body.y));
+	text_draw(dtr, &fnt_hud, 0, 0, context);
+	snprintf(dtr, 512, "E:%d", level->entities.count);
+	text_draw(dtr, &fnt_hud, 0, 8, context);
 }
 
 #pragma endregion
@@ -1015,12 +1073,8 @@ void player_draw(player_t* player, level_t* level, render_context_t* context) {
 	// render player
 	if (player->sprites_index != NULL) {
 		sprite_t* sprite_index = &player->sprites_index[player->powerup];
-		sprite_draw_pro(sprite_index, player->image_index, player->body.x, player->body.y + 1, sprite_index->width * player->body.origin_x, sprite_index->height * player->body.origin_y, player->flip_x, false, context);
+		sprite_draw_pro(sprite_index, player->image_index, player->body.x - level->camera_x, player->body.y + 1 - level->camera_y, sprite_index->width * player->body.origin_x, sprite_index->height * player->body.origin_y, player->flip_x, false, context);
 	}
-	Rectangle r = physics_body_get_rectangle(&player->body);
-	r.x = floorf(r.x); r.y = floorf(r.y);
-	DrawRectanglePro(r, (Vector2) { 0, 0 }, 0, (Color) { 255, 0, 0, 100 });
-	text_draw("MARIO TEST", &fnt_hud, 0, 0, context);
 }
 
 void player_update(player_t* player, level_t* level, controller_state_t* controller) {
@@ -1041,14 +1095,13 @@ void player_update(player_t* player, level_t* level, controller_state_t* control
 	}
 
 	if (player->body.grounded && controller->current.a && !controller->previous.a) {
-		player->body.yspd = -5.0f;
+		player->body.yspd = -5.0f - (fabsf(player->body.xspd / 2.25f));
 		PlaySound(sounds.jump);
 	}
 	else if (player->body.yspd > 5.0f) {
 		player->body.yspd = 5.0f;
 	}
 
-	/*
 	float h = controller->current.h;
 	int traction = 1;
 	// horizontal max speed changes under these conditions:
@@ -1069,6 +1122,7 @@ void player_update(player_t* player, level_t* level, controller_state_t* control
 
 	// player is moving left or right
 	if (h != 0 && (h * player->body.xspd < player->body.xspd_max)) {
+		player->flip_x = (h < 0) ? true : false;
 		// forward acceleration just increments by the acceleration value
 		if (h * player->body.xspd >= 0) {
 			player->body.xspd += h * accel;
@@ -1122,13 +1176,6 @@ void player_update(player_t* player, level_t* level, controller_state_t* control
 			player->body.xspd = -player->body.xspd_max;
 		}
 	}
-	*/
-
-	if (player->body.xspd < 0) {
-		player->flip_x = true;
-	} else if (player->body.xspd > 0) {
-		player->flip_x = false;
-	}
 
 	player->body.yspd += player->body.grav;
 	player->body.x += player->body.xspd;
@@ -1136,6 +1183,7 @@ void player_update(player_t* player, level_t* level, controller_state_t* control
 	player->body.y += player->body.yspd;
 	resolve_collisions_y(&player->body, &level->collision_map);
 
+	// put this in an animation update section?
 	if (!player->body.grounded) {
 		player->sprites_index = mario_sprites.jump;
 		player->image_index = player->body.yspd > 0 ? 1 : 0;
@@ -1148,6 +1196,9 @@ void player_update(player_t* player, level_t* level, controller_state_t* control
 		else {
 			player->sprites_index = mario_sprites.idle;
 			player->image_index = (controller->current.v < 0) ? 1 : 0;
+		}
+		if (h != 0 && h * player->body.xspd < 0) {
+			player->sprites_index = mario_sprites.skid;
 		}
 	}
 }
