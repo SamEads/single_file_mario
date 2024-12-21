@@ -189,13 +189,13 @@ void type_name##_tilemap_free(type_name##_tilemap_t* map) { \
 	} \
 	free(map->data); \
 } \
-inline type type_name##_tilemap_get(type_name##_tilemap_t* map, int x, int y) { \
+type type_name##_tilemap_get(type_name##_tilemap_t* map, int x, int y) { \
 	if (x < 0 || y < 0 || x >= map->width || y >= map->height) { \
 		return default_val; \
 	} \
 	return map->data[x][y]; \
 } \
-inline void type_name##_tilemap_set(type_name##_tilemap_t* map, int x, int y, type val) { \
+void type_name##_tilemap_set(type_name##_tilemap_t* map, int x, int y, type val) { \
 	map->data[x][y] = val; \
 }
 
@@ -287,7 +287,8 @@ void background_draw(background_t* background) {
 	if (background->clamp_y) {
 		if (screen_rect.y < -background->tex.height + SCREEN_HEIGHT) {
 			screen_rect.y = -background->tex.height + SCREEN_HEIGHT;
-		} else if (screen_rect.y > 0) {
+		}
+		else if (screen_rect.y > 0) {
 			screen_rect.y = 0;
 		}
 	}
@@ -302,9 +303,9 @@ void background_free(background_t* background) {
 
 #pragma region Sprites
 
-typedef struct sprite_frame {
+struct sprite_frame {
 	int x, y;
-} sprite_frame_t;
+};
 
 typedef struct sprite {
 	int width, height;
@@ -340,7 +341,7 @@ void sprite_draw_pro(sprite_t* sprite, int image_index, float x, float y, int or
 	DrawTexturePro(context->sprite_atlas, sprite_rect, screen_rect, (Vector2) { origin_x, origin_y }, 0, WHITE);
 }
 
-inline void sprite_draw(sprite_t* sprite, int image_index, float x, float y, bool flip_x, bool flip_y, render_context_t* context) {
+void sprite_draw(sprite_t* sprite, int image_index, float x, float y, bool flip_x, bool flip_y, render_context_t* context) {
 	sprite_draw_pro(sprite, image_index, x, y, 0.0f, 0.0f, flip_x, flip_y, context);
 }
 
@@ -388,7 +389,8 @@ void sprite_init(const char* res_loc, sprite_t* sprite, Image* atlas_img, stbrp_
         if (sprite->frame_count == 0 && strncmp(line, "frames:", 7) == 0) {
             if (sscanf(line, "frames: %d", &sprite->frame_count) != 1) {
                 goto close_file;
-            } else {
+            }
+			else {
                 sprite->frames = malloc(sprite->frame_count * sizeof(sprite_frame_t));
                 sprite_height = img.height / sprite->frame_count;
                 printd("Frame dimensions: [%d, %d]\n", sprite_width, sprite_height);
@@ -408,7 +410,8 @@ void sprite_init(const char* res_loc, sprite_t* sprite, Image* atlas_img, stbrp_
         if (sprite->order == NULL && strncmp(line, "order:", 6) == 0) {
             if (sscanf(line, "order: %s", order_buf) != 1) {
                 goto close_file;
-            } else {
+            }
+			else {
                 size_t order_len = strlen(order_buf);
 
                 // fetch count of frames to allocate for order
@@ -422,7 +425,8 @@ void sprite_init(const char* res_loc, sprite_t* sprite, Image* atlas_img, stbrp_
                             i++;
                         }
                         sprite->order_count++;
-                    } else i++;
+                    }
+					else i++;
                 }
 
                 sprite->order = malloc(sprite->order_count * sizeof(int));
@@ -438,7 +442,8 @@ void sprite_init(const char* res_loc, sprite_t* sprite, Image* atlas_img, stbrp_
                             i++;
                         }
                         sprite->order[num_count++] = temp;
-                    } else i++;
+                    }
+					else i++;
                 }
             }
         }
@@ -455,7 +460,8 @@ close_file:
 			}
 		}
 		printd("]\n");
-	} else {
+	}
+	else {
 		printd("Loaded sprite [%s] with [%d] frames\n", res_loc, sprite->frame_count);
 	}
 #endif
@@ -663,7 +669,7 @@ void resolve_collisions_x(physics_body_t* body, collision_tilemap_t* map) {
 	}
 }
 
-inline void resolve_collisions_y(physics_body_t* body, collision_tilemap_t* map) {
+void resolve_collisions_y(physics_body_t* body, collision_tilemap_t* map) {
 	Rectangle body_rect = physics_body_get_rectangle(body);
 	int tile_size = map->tile_size;
 
@@ -1046,11 +1052,11 @@ void level_draw(level_t* level, render_context_t* context) {
 	}
 	player_draw(&level->player, level, context);
 
-	char dtr[512];
-	snprintf(dtr, 512, "PX:%d,PY:%d", (int)(level->player.body.x), (int)(level->player.body.y));
-	text_draw(dtr, &fnt_hud, 0, 0, context);
-	snprintf(dtr, 512, "E:%d", level->entities.count);
-	text_draw(dtr, &fnt_hud, 0, 8, context);
+	//char dtr[512];
+	//snprintf(dtr, 512, "PX:%d,PY:%d", (int)(level->player.body.x), (int)(level->player.body.y));
+	//text_draw(dtr, &fnt_hud, 0, 0, context);
+	//snprintf(dtr, 512, "E:%d", level->entities.count);
+	//text_draw(dtr, &fnt_hud, 0, 8, context);
 }
 
 #pragma endregion
@@ -1070,13 +1076,19 @@ inline sprite_t* player_get_sprite(player_t* player) {
 }
 
 void player_draw(player_t* player, level_t* level, render_context_t* context) {
-	// render player
 	if (player->sprites_index != NULL) {
 		sprite_t* sprite_index = &player->sprites_index[player->powerup];
 		sprite_draw_pro(sprite_index, player->image_index, player->body.x - level->camera_x, player->body.y + 1 - level->camera_y, sprite_index->width * player->body.origin_x, sprite_index->height * player->body.origin_y, player->flip_x, false, context);
 	}
 }
 
+void player_jump(player_t* player) {
+	player->body.yspd = -5.0f - (fabsf(player->body.xspd / 2.25f));
+	PlaySound(sounds.jump);
+}
+
+#define WALK_SPEED 1.25f
+#define RUN_SPEED 2.25f
 void player_update(player_t* player, level_t* level, controller_state_t* controller) {
 	static const float decel = 0.0625f;
 	static const float decel_air = 0.0125f;
@@ -1095,25 +1107,27 @@ void player_update(player_t* player, level_t* level, controller_state_t* control
 	}
 
 	if (player->body.grounded && controller->current.a && !controller->previous.a) {
-		player->body.yspd = -5.0f - (fabsf(player->body.xspd / 2.25f));
-		PlaySound(sounds.jump);
+		player_jump(player);
 	}
-	else if (player->body.yspd > 5.0f) {
+
+	if (player->body.grounded && controller->current.x && !controller->previous.x) {
+
+	}
+	
+	// Limit vertical fall
+	if (player->body.yspd > 5.0f) {
 		player->body.yspd = 5.0f;
 	}
 
 	float h = controller->current.h;
 	int traction = 1;
-	// horizontal max speed changes under these conditions:
-	// (not crouching, and on the ground) OR
-	// (not on the ground, and ((xspd >= 0 & h > 0) | (xspd <= 0 & h < 0))
 	if ((player->body.grounded) ||
 		((!player->body.grounded) && ((player->body.xspd >= 0 && h > 0) || (player->body.xspd <= 0 && h < 0)))) {
-		if (fabsf(player->body.xspd) >= 1.25f && controller->current.b) {
-			player->body.xspd_max = 2.25f;
+		if (fabsf(player->body.xspd) >= WALK_SPEED && controller->current.b) {
+			player->body.xspd_max = RUN_SPEED;
 		}
 		else {
-			player->body.xspd_max = 1.25f;
+			player->body.xspd_max = WALK_SPEED;
 		}
 	}
 	else {
@@ -1124,7 +1138,7 @@ void player_update(player_t* player, level_t* level, controller_state_t* control
 	if (h != 0 && (h * player->body.xspd < player->body.xspd_max)) {
 		player->flip_x = (h < 0) ? true : false;
 		// forward acceleration just increments by the acceleration value
-		if (h * player->body.xspd >= 0) {
+		if (h * player->body.xspd > 0) {
 			player->body.xspd += h * accel;
 		}
 		// skidding
@@ -1133,19 +1147,18 @@ void player_update(player_t* player, level_t* level, controller_state_t* control
 			if (player->body.grounded) {
 				// multiplies the turn speed by an amount
 				float skid_factor = 1.0f;
-				if (fabsf(player->body.xspd) <= 1.25f) {
+				if (fabsf(player->body.xspd) <= WALK_SPEED) {
 					skid_factor = 1.0f;
 				}
-				else if (fabsf(player->body.xspd) <= 2.25f) {
+				else if (fabsf(player->body.xspd) <= RUN_SPEED) {
 					skid_factor = 2.0f;
 				}
-				else if (fabsf(player->body.xspd) > 2.25f) {
+				else if (fabsf(player->body.xspd) > RUN_SPEED) {
 					skid_factor = 4.0f;
 				}
 				player->body.xspd += h * ((turn * skid_factor) * traction);
-
 			}
-			else if (h * player->body.xspd > -1.25f) {
+			else if (h * player->body.xspd > -WALK_SPEED) {
 				player->body.xspd += h * turn;
 			}
 			else
