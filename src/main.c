@@ -31,8 +31,14 @@ typedef long entity_id_t;
 #define SCREEN_HEIGHT 224
 #define MAX_CONTROLLERS 4
 
+// player speeds
+#define WALK_SPEED 1.25f
+#define RUN_SPEED 2.25f
+
+// background colors
 #define ORANGE_SKY	(Color) { 255, 231, 181, 255 }
 #define BLUE_SKY	(Color) { 0, 99, 189, 255 }
+#define BLACK_SKY	(Color) { 0, 0, 0, 255 }
 
 // texture atlas defines
 #define TEXTURE_ATLAS_WIDTH 512
@@ -175,6 +181,7 @@ typedef struct type_name##_tilemap { \
 	int tile_size; \
 } type_name##_tilemap_t; \
 void type_name##_tilemap_init(type_name##_tilemap_t* map, int width, int height) { \
+	printd("Type: " #type ", name: " #type_name "\n"); \
 	map->width = width; \
 	map->height = height; \
 	map->tile_size = 16; \
@@ -196,6 +203,9 @@ type type_name##_tilemap_get(type_name##_tilemap_t* map, int x, int y) { \
 	return map->data[x][y]; \
 } \
 void type_name##_tilemap_set(type_name##_tilemap_t* map, int x, int y, type val) { \
+	if (x < 0 || y < 0 || x >= map->width || y >= map->height) { \
+		return; \
+	} \
 	map->data[x][y] = val; \
 }
 
@@ -638,31 +648,30 @@ void resolve_collisions_x(physics_body_t* body, collision_tilemap_t* map) {
 	for (int y = top - 1; y <= bottom + 1; ++y) {
 		// right
 		if (body->xspd > 0) {
-			Rectangle side_player_rect = { body_rect.x + body_rect.width - body->xspd, body_rect.y, body->xspd * 2, body_rect.height };
-
+			Rectangle side_player_rect = { body_rect.x + body_rect.width, body_rect.y, 0, body_rect.height };
 			for (int x = right; x <= right + 1; ++x) {
 				collision_type_t tile_type = collision_tilemap_get(map, x, y);
-				if (tile_type == COLLISION_AIR) continue;
-
-				Rectangle tile_rect = { x * tile_size, y * tile_size, tile_size, tile_size };
-				if (rectangle_collision(side_player_rect, tile_rect)) {
-					body->x = tile_rect.x - body_rect.width + (body->width / 2);
-					body->xspd = 0;
+				if (tile_type == COLLISION_SOLID) {
+					Rectangle tile_rect = { x * tile_size, y * tile_size, tile_size, tile_size };
+					if (rectangle_collision(side_player_rect, tile_rect)) {
+						body->x = tile_rect.x - body_rect.width + (body->width * body->origin_x);
+						body->xspd = 0;
+					}
 				}
+
 			}
 		}
 		// left
 		else if (body->xspd < 0) {
-			Rectangle side_player_rect = { body_rect.x + body->xspd, body_rect.y, -body->xspd * 2, body_rect.height };
-
+			Rectangle side_player_rect = { body_rect.x, body_rect.y, 0, body_rect.height };
 			for (int x = left - 1; x <= left; ++x) {
 				collision_type_t tile_type = collision_tilemap_get(map, x, y);
-				if (tile_type == COLLISION_AIR) continue;
-
-				Rectangle tile_rect = { x * tile_size, y * tile_size, tile_size, tile_size };
-				if (rectangle_collision(side_player_rect, tile_rect)) {
-					body->x = tile_rect.x + tile_size + (body->width / 2);
-					body->xspd = 0;
+				if (tile_type == COLLISION_SOLID) {
+					Rectangle tile_rect = { x * tile_size, y * tile_size, tile_size, tile_size };
+					if (rectangle_collision(side_player_rect, tile_rect)) {
+						body->x = tile_rect.x + tile_size + (body->width * body->origin_x);
+						body->xspd = 0;
+					}
 				}
 			}
 		}
@@ -672,7 +681,6 @@ void resolve_collisions_x(physics_body_t* body, collision_tilemap_t* map) {
 void resolve_collisions_y(physics_body_t* body, collision_tilemap_t* map) {
 	Rectangle body_rect = physics_body_get_rectangle(body);
 	int tile_size = map->tile_size;
-
 	int left = body_rect.x / tile_size, right = (body_rect.x + body_rect.width) / tile_size;
 	int top = body_rect.y / tile_size, bottom = (body_rect.y + body_rect.height) / tile_size;
 
@@ -682,29 +690,29 @@ void resolve_collisions_y(physics_body_t* body, collision_tilemap_t* map) {
 		if (body->yspd < 0) {
 			for (int y = top - 1; y <= top; ++y) {
 				collision_type_t tile_type = collision_tilemap_get(map, x, y);
-				if (tile_type == COLLISION_AIR) continue;
-
-				Rectangle tile_rect = { x * tile_size, y * tile_size, tile_size, tile_size };
-				if (rectangle_collision(body_rect, tile_rect)) {
-					body->y = tile_rect.y + tile_size + body->height;
-					body->yspd = 0;
-					PlaySound(sounds.bump);
-					return;
+				if (tile_type == COLLISION_SOLID) {
+					Rectangle tile_rect = { x * tile_size, y * tile_size, tile_size, tile_size };
+					if (rectangle_collision(body_rect, tile_rect)) {
+						body->y = tile_rect.y + tile_size + (body->height * body->origin_y);
+						body->yspd = 0;
+						PlaySound(sounds.bump);
+						return;
+					}
 				}
 			}
 		}
 		// down
-		else for (int y = bottom; y <= bottom + 1; ++y) {
-			collision_type_t tile_type = collision_tilemap_get(map, x, y);
-			if (tile_type == COLLISION_AIR) continue;
-
-			Rectangle tile_rect = { x * tile_size, y * tile_size, tile_size, tile_size };
-			if (rectangle_collision(body_rect, tile_rect)) {
-				if (body->yspd > 0) {
-					body->y = tile_rect.y;
-					body->yspd = 0;
-					body->grounded = true;
-					return;
+		else if (body->yspd > 0) {
+			for (int y = bottom; y <= bottom + 1; ++y) {
+				collision_type_t tile_type = collision_tilemap_get(map, x, y);
+				if (tile_type == COLLISION_SOLID || tile_type == COLLISION_SEMI) {
+					Rectangle tile_rect = { x * tile_size, y * tile_size, tile_size, tile_size };
+					if (rectangle_collision(body_rect, tile_rect)) {
+						body->y = tile_rect.y;
+						body->yspd = 0;
+						body->grounded = true;
+						return;
+					}
 				}
 			}
 		}
@@ -952,7 +960,7 @@ void game_init(game_t* game) {
 
 	// first level init
 	game->level = malloc(sizeof(level_t));
-	level_init(game->level, "cave", (Color) { 0, 0, 0, 255 }, 24, 16);
+	level_init(game->level, "cave", BLACK_SKY, 24, 16);
 
 	// create rendering surface 
 	RenderTexture2D render_texture = LoadRenderTexture(SCREEN_WIDTH, SCREEN_HEIGHT);
@@ -1050,13 +1058,8 @@ void level_draw(level_t* level, render_context_t* context) {
 			e->update(e, level);
 		}
 	}
-	player_draw(&level->player, level, context);
 
-	//char dtr[512];
-	//snprintf(dtr, 512, "PX:%d,PY:%d", (int)(level->player.body.x), (int)(level->player.body.y));
-	//text_draw(dtr, &fnt_hud, 0, 0, context);
-	//snprintf(dtr, 512, "E:%d", level->entities.count);
-	//text_draw(dtr, &fnt_hud, 0, 8, context);
+	player_draw(&level->player, level, context);
 }
 
 #pragma endregion
@@ -1075,6 +1078,32 @@ inline sprite_t* player_get_sprite(player_t* player) {
 	return (player->sprites_index == NULL) ? NULL : &player->sprites_index[player->powerup];
 }
 
+void player_animate(player_t* player, controller_state_t* controller) {
+	// Jump
+	if (!player->body.grounded) {
+		player->sprites_index = mario_sprites.jump;
+		player->image_index = player->body.yspd > 0 ? 1 : 0;
+		return;
+	}
+
+	// Skid
+	if (controller->current.h * player->body.xspd < 0.0f) {
+		player->sprites_index = mario_sprites.skid;
+		return;
+	}
+
+	// Walk
+	if (player->body.xspd != 0.0f) {
+		player->sprites_index = mario_sprites.walk;
+		player->image_index += fabsf(player->body.xspd) / 6.0f;
+		return;
+	}
+
+	// Idle
+	player->sprites_index = mario_sprites.idle;
+	player->image_index = (controller->current.v < 0) ? 1 : 0;
+}
+
 void player_draw(player_t* player, level_t* level, render_context_t* context) {
 	if (player->sprites_index != NULL) {
 		sprite_t* sprite_index = &player->sprites_index[player->powerup];
@@ -1087,8 +1116,6 @@ void player_jump(player_t* player) {
 	PlaySound(sounds.jump);
 }
 
-#define WALK_SPEED 1.25f
-#define RUN_SPEED 2.25f
 void player_update(player_t* player, level_t* level, controller_state_t* controller) {
 	static const float decel = 0.0625f;
 	static const float decel_air = 0.0125f;
@@ -1098,7 +1125,6 @@ void player_update(player_t* player, level_t* level, controller_state_t* control
 	static const float grav_jump = 0.1875f;
 	static const float grav_fall = 0.375f;
 
-	player->image_index += 0.125f;
 	if (player->body.yspd > 0 || player->body.yspd < 0 && !controller->current.a) {
 		player->body.grav = grav_fall;
 	}
@@ -1110,20 +1136,11 @@ void player_update(player_t* player, level_t* level, controller_state_t* control
 		player_jump(player);
 	}
 
-	if (player->body.grounded && controller->current.x && !controller->previous.x) {
-
-	}
-	
-	// Limit vertical fall
-	if (player->body.yspd > 5.0f) {
-		player->body.yspd = 5.0f;
-	}
-
 	float h = controller->current.h;
-	int traction = 1;
-	if ((player->body.grounded) ||
-		((!player->body.grounded) && ((player->body.xspd >= 0 && h > 0) || (player->body.xspd <= 0 && h < 0)))) {
-		if (fabsf(player->body.xspd) >= WALK_SPEED && controller->current.b) {
+	float traction = 1.0f;
+	// Player speed can be changed any time on ground, or when the player is in the air and sign of input = spd
+	if ((player->body.grounded) || ((!player->body.grounded && h * player->body.xspd >= 0))) {
+		if (controller->current.b && fabsf(player->body.xspd) >= WALK_SPEED) {
 			player->body.xspd_max = RUN_SPEED;
 		}
 		else {
@@ -1134,37 +1151,41 @@ void player_update(player_t* player, level_t* level, controller_state_t* control
 		player->body.xspd_max = 0.0f;
 	}
 
-	// player is moving left or right
-	if (h != 0 && (h * player->body.xspd < player->body.xspd_max)) {
-		player->flip_x = (h < 0) ? true : false;
-		// forward acceleration just increments by the acceleration value
-		if (h * player->body.xspd > 0) {
-			player->body.xspd += h * accel;
-		}
-		// skidding
-		else {
-			// ground skid
-			if (player->body.grounded) {
-				// multiplies the turn speed by an amount
-				float skid_factor = 1.0f;
-				if (fabsf(player->body.xspd) <= WALK_SPEED) {
-					skid_factor = 1.0f;
-				}
-				else if (fabsf(player->body.xspd) <= RUN_SPEED) {
-					skid_factor = 2.0f;
-				}
-				else if (fabsf(player->body.xspd) > RUN_SPEED) {
-					skid_factor = 4.0f;
-				}
-				player->body.xspd += h * ((turn * skid_factor) * traction);
+	// horizontal input when less than max speed
+	if (h != 0) {
+		if (h * player->body.xspd < player->body.xspd_max) {
+			player->flip_x = (h < 0) ? true : false;
+			// normal forward acceleration
+			if (h * player->body.xspd > 0) {
+				player->body.xspd += h * accel;
 			}
-			else if (h * player->body.xspd > -WALK_SPEED) {
-				player->body.xspd += h * turn;
+			// skidding
+			else {
+				// ground skid
+				if (player->body.grounded) {
+					// multiplies the turn speed by an amount
+					float skid_factor = 1.0f;
+					float current_xspd = fabsf(player->body.xspd);
+					if (current_xspd <= WALK_SPEED) {
+						skid_factor = 1.0f;
+					}
+					else if (current_xspd <= RUN_SPEED) {
+						skid_factor = 2.0f;
+					}
+					else if (current_xspd > RUN_SPEED) {
+						skid_factor = 4.0f;
+					}
+					player->body.xspd += h * (turn * skid_factor * traction);
+				}
+				else if (h * player->body.xspd > -WALK_SPEED) {
+					player->body.xspd += h * turn;
+				}
+				else
+					player->body.xspd += h * (turn_air * 2);
 			}
-			else
-				player->body.xspd += h * (turn_air * 2);
 		}
 	}
+	// no input held down- slow player
 	else {
 		if (player->body.xspd > 0) {
 			player->body.xspd -= (player->body.grounded) ? decel : decel_air;
@@ -1180,40 +1201,20 @@ void player_update(player_t* player, level_t* level, controller_state_t* control
 		}
 	}
 
-	// a sign function could concat these functions rly easily
+	// limit player speed on X and Y axis
 	if (player->body.grounded) {
-		if (player->body.xspd > player->body.xspd_max) {
-			player->body.xspd = player->body.xspd_max;
-		}
-		else if (player->body.xspd < -player->body.xspd_max) {
-			player->body.xspd = -player->body.xspd_max;
-		}
+		player->body.xspd = clampf(player->body.xspd, -player->body.xspd_max, player->body.xspd_max);
 	}
+	player->body.yspd = min(player->body.yspd, 5.0f);
 
+	// apply velocity and collisions
 	player->body.yspd += player->body.grav;
 	player->body.x += player->body.xspd;
 	resolve_collisions_x(&player->body, &level->collision_map);
 	player->body.y += player->body.yspd;
 	resolve_collisions_y(&player->body, &level->collision_map);
 
-	// put this in an animation update section?
-	if (!player->body.grounded) {
-		player->sprites_index = mario_sprites.jump;
-		player->image_index = player->body.yspd > 0 ? 1 : 0;
-	}
-	else {
-		if (player->body.xspd != 0) {
-			player->sprites_index = mario_sprites.walk;
-			player->image_index += fabsf(player->body.xspd) / 8.0f;
-		}
-		else {
-			player->sprites_index = mario_sprites.idle;
-			player->image_index = (controller->current.v < 0) ? 1 : 0;
-		}
-		if (h != 0 && h * player->body.xspd < 0) {
-			player->sprites_index = mario_sprites.skid;
-		}
-	}
+	player_animate(player, controller);
 }
 
 #pragma endregion
