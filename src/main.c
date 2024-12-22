@@ -514,15 +514,15 @@ void font_free(font_t* font) {
 void text_draw(const char* text, font_t* font, float x, float y, render_context_t* context) {
 	size_t string_len = strlen(text), order_len = strlen(font->order);
 	int _x = x, _y = y;
-	int font_width = font->sprite_data.width;
+	int font_width = font->sprite_data.width, font_height = font->sprite_data.height;
 	for (int i = 0; i < string_len; ++i) {
 		if (text[i] == ' ') {
-			_x += 8;
+			_x += font->spacing + font_width;
 			continue;
 		}
 		if (text[i] == '\n') {
 			_x = 0;
-			_y += 8;
+			_y += font_height;
 			continue;
 		}
 		for (int j = 0; j < order_len; ++j) {
@@ -647,7 +647,7 @@ void resolve_collisions_x(physics_body_t* body, tilemap_t* map) {
 
 	for (int y = top - 1; y <= bottom + 1; ++y) {
 		// right
-		if (body->xspd > 0) {
+		{
 			// vertical line on right of physbody
 			Rectangle side_player_rect = { body_rect.x + body_rect.width, body_rect.y, 0, body_rect.height };
 			for (int x = right; x <= right + 1; ++x) {
@@ -663,7 +663,7 @@ void resolve_collisions_x(physics_body_t* body, tilemap_t* map) {
 			}
 		}
 		// left
-		else if (body->xspd < 0) {
+		{
 			// vertical line on left of physbody
 			Rectangle side_player_rect = { body_rect.x, body_rect.y, 0, body_rect.height };
 			for (int x = left - 1; x <= left; ++x) {
@@ -971,6 +971,7 @@ void game_init(const char* window_title, game_t* game) {
 
 	// create rendering surface 
 	RenderTexture2D render_texture = LoadRenderTexture(SCREEN_WIDTH, SCREEN_HEIGHT);
+	RenderTexture2D hud_texture = LoadRenderTexture(SCREEN_WIDTH, SCREEN_HEIGHT);
 	while (!WindowShouldClose()) {
 		// update
 		game_update(game);
@@ -983,13 +984,28 @@ void game_init(const char* window_title, game_t* game) {
 		game_draw(game);
 		EndTextureMode();
 		
+		// draw hud to render target
+		BeginTextureMode(hud_texture);
+		ClearBackground((Color) { 0, 0, 0, 180 });
+		BeginBlendMode(BLEND_SUBTRACT_COLORS);
+		DrawCircle(
+			(int)game->level->player.body.x - game->level->camera_x,
+			(int)game->level->player.body.y - game->level->camera_y - 14,
+			25,
+			(Color) { 0, 0, 0, 0 }
+		);
+		EndBlendMode();
+		EndTextureMode();
+
 		// draw render target to screen
 		BeginDrawing();
 		ClearBackground(WHITE);
 		DrawTexturePro(render_texture.texture, (Rectangle) { 0, 0, render_texture.texture.width, -render_texture.texture.height }, (Rectangle) { 0, 0, GetScreenWidth(), -GetScreenHeight() }, (Vector2) { 0, 0 }, 0, WHITE);
+		DrawTexturePro(hud_texture.texture, (Rectangle) { 0, 0, hud_texture.texture.width, -hud_texture.texture.height }, (Rectangle) { 0, 0, GetScreenWidth(), -GetScreenHeight() }, (Vector2) { 0, 0 }, 0, WHITE);
 		EndDrawing();
 	}
 	UnloadRenderTexture(render_texture);
+	UnloadRenderTexture(hud_texture);
 }
 
 void game_end(game_t* game) {
@@ -1126,7 +1142,7 @@ void player_animate(player_t* player, controller_state_t* controller) {
 	// Walk
 	if (player->body.xspd != 0.0f) {
 		player->sprites_index = mario_sprites.walk;
-		player->image_index += fabsf(player->body.xspd) / 6.0f;
+		player->image_index += max(0.125f, fabsf(player->body.xspd) / 6.0f);
 		return;
 	}
 
