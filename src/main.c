@@ -243,12 +243,14 @@ struct controller_state {
 
 void controller_state_update(controller_state_t* state) {
 	memcpy(&state->previous, &state->current, sizeof(controller_state_t));
-	state->current.a = IsKeyDown(KEY_X);
-	state->current.b = IsKeyDown(KEY_Z);
-	state->current.x = IsKeyDown(KEY_C);
-	state->current.y = IsKeyDown(KEY_V);
-	state->current.h = IsKeyDown(KEY_RIGHT) - IsKeyDown(KEY_LEFT);
-	state->current.v = IsKeyDown(KEY_DOWN) - IsKeyDown(KEY_UP);
+	state->current = (controller_buttons_t) {
+		.a = IsKeyDown(KEY_X),
+		.b = IsKeyDown(KEY_Z),
+		.x = IsKeyDown(KEY_C),
+		.y = IsKeyDown(KEY_V),
+		.h = IsKeyDown(KEY_RIGHT) - IsKeyDown(KEY_LEFT),
+		.v = IsKeyDown(KEY_DOWN) - IsKeyDown(KEY_UP)
+	};
 }
 
 #pragma endregion
@@ -595,18 +597,23 @@ struct physics_body {
 
 void physics_body_init(physics_body_t* body, int width, int height) {
 	*body = (physics_body_t) {
-		.xspd_max = 10.0f,
-		.yspd_max = 5.0f,
+		.width = width,
+		.height = height,
 		.origin_x = 0.5f,
 		.origin_y = 1.0f,
+		.xspd_max = 5.0f,
+		.yspd_max = 5.0f,
 		.grav = 0.2f,
-		.width = width,
-		.height = height
 	};
 }
 
 Rectangle physics_body_get_rectangle(physics_body_t* body) {
-	return (Rectangle) { body->x - body->width * body->origin_x, body->y - (body->height * body->origin_y), body->width, body->height };
+	return (Rectangle) {
+		.x = body->x - body->width * body->origin_x,
+		.y = body->y - (body->height * body->origin_y),
+		.width = body->width,
+		.height = body->height
+	};
 }
 
 bool point_in_rectangle(Vector2 p, Rectangle r) {
@@ -805,9 +812,10 @@ void level_init(level_t* level, const char* background_res, Color background_col
 		tilemap_set(&level->tilemap, i, 11, (tile_t) { .collision = COLLISION_SOLID });
 	}
 	tilemap_set(&level->tilemap, 16, 12, (tile_t) { .collision = COLLISION_SOLID });
-	for (int i = 20; i <= 23; ++i) {
+	for (int i = 20; i <= level->tilemap.width; ++i) {
 		tilemap_set(&level->tilemap, i, 10, (tile_t) { .collision = COLLISION_SOLID });
 	}
+
 	tilemap_set(&level->tilemap, 0, 10, (tile_t) { .collision = COLLISION_SOLID });
 	for (int i = 2; i <= 5; ++i) {
 		tilemap_set(&level->tilemap, i, 9, (tile_t) { .collision = COLLISION_SOLID });
@@ -965,11 +973,11 @@ void game_init(const char* window_title, game_t* game) {
 
 	// first level init
 	game->level = malloc(sizeof(level_t));
-	level_init(game->level, "cave", BLACK_SKY, 24, 16);
+	level_init(game->level, "cave", BLACK_SKY, 48, 16);
 
 	// create rendering surface 
 	RenderTexture2D render_texture = LoadRenderTexture(SCREEN_WIDTH, SCREEN_HEIGHT);
-	//RenderTexture2D hud_texture = LoadRenderTexture(SCREEN_WIDTH, SCREEN_HEIGHT);
+	RenderTexture2D hud_texture = LoadRenderTexture(SCREEN_WIDTH, SCREEN_HEIGHT);
 	while (!WindowShouldClose()) {
 		// update
 		game_update(game);
@@ -982,15 +990,19 @@ void game_init(const char* window_title, game_t* game) {
 		game_draw(game);
 		EndTextureMode();
 
+		BeginTextureMode(hud_texture);
+		ClearBackground((Color) { 0 });
+		EndTextureMode();
+
 		// draw render target to screen
 		BeginDrawing();
-		ClearBackground(WHITE);
+		ClearBackground(BLACK);
 		DrawTexturePro(render_texture.texture, (Rectangle) { 0, 0, render_texture.texture.width, -render_texture.texture.height }, (Rectangle) { 0, 0, GetScreenWidth(), -GetScreenHeight() }, (Vector2) { 0, 0 }, 0, WHITE);
-		//DrawTexturePro(hud_texture.texture, (Rectangle) { 0, 0, hud_texture.texture.width, -hud_texture.texture.height }, (Rectangle) { 0, 0, GetScreenWidth(), -GetScreenHeight() }, (Vector2) { 0, 0 }, 0, WHITE);
+		DrawTexturePro(hud_texture.texture, (Rectangle) { 0, 0, hud_texture.texture.width, -hud_texture.texture.height }, (Rectangle) { 0, 0, GetScreenWidth(), -GetScreenHeight() }, (Vector2) { 0, 0 }, 0, WHITE);
 		EndDrawing();
 	}
 	UnloadRenderTexture(render_texture);
-	//UnloadRenderTexture(hud_texture);
+	UnloadRenderTexture(hud_texture);
 }
 
 void game_end(game_t* game) {
