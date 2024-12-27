@@ -24,7 +24,7 @@ typedef long entity_id_t;
 // resource related defines
 #define WINDOW_CAPTION 			"Super Mario World"
 #ifdef DEBUG
-#define WINDOW_CAPTION_DEBUG	" [DEBUG]"
+#define WINDOW_CAPTION_DEBUG	WINDOW_CAPTION " [DEBUG]"
 #else
 #define WINDOW_CAPTION_DEBUG 	""
 #endif
@@ -275,7 +275,7 @@ typedef struct background {
 } background_t;
 
 void background_init(const char* res_loc, background_t* background, bool tiled) {
-	*background = (background_t) {};
+	*background = (background_t) { 0 };
 
 	// index path
 	char indexed_loc[MAX_PATH_LEN] = "";
@@ -367,6 +367,8 @@ void sprite_draw_ex(sprite_t* sprite, int image_index, float x, float y, int ori
 void sprite_draw(sprite_t* sprite, int image_index, float x, float y, bool flip_x, bool flip_y, render_context_t* context) {
 	sprite_draw_ex(sprite, image_index, x, y, 0.0f, 0.0f, flip_x, flip_y, context);
 }
+
+ARRAYLIST_DEFINE(sprite_t*, spriteptr);
 
 void sprite_init(const char* res_loc, sprite_t* sprite, Image* atlas_img, stbrp_context* rect_packer) {
 	// replace all instances of "." with "/" for local resources
@@ -510,7 +512,7 @@ typedef struct font {
 font_t fnt_hud;
 
 void font_init(const char* res_loc, const char* order, font_t* font, Image* atlas, stbrp_context* rect_packer) {
-	*font = (font_t) {};
+	*font = (font_t) { 0 };
 	sprite_init(res_loc, &font->sprite_data, atlas, rect_packer);
 	int order_len = strlen(order);
 	memcpy((void*)font->order, order, (size_t)order_len + 1);
@@ -622,7 +624,7 @@ bool point_in_rectangle(Vector2 p, Rectangle r) {
 
 bool rectangle_collision(Rectangle r1, Rectangle r2) {
 	return ((r1.x < (r2.x + r2.width) && (r1.x + r1.width) > r2.x) &&
-		(r1.y < (r2.y + r2.height) && (r1.y + r1.height) > r2.y));
+			(r1.y < (r2.y + r2.height) && (r1.y + r1.height) > r2.y));
 }
 
 bool rectangle_collision_list(Rectangle base_rect, Rectangle* recs, int num_rects) {
@@ -780,7 +782,7 @@ struct level {
 };
 
 void level_init(level_t* level, const char* background_res, Color background_color, int width, int height) {
-	*level = (level_t) {};
+	*level = (level_t) { 0 };
 
 	// entities
 	player_init(&level->player);
@@ -871,7 +873,7 @@ typedef struct entity_goomba {
 } entity_goomba_t;
 
 void goomba_init(entity_goomba_t* entity, level_t* level) {
-	*entity = (entity_goomba_t) {};
+	*entity = (entity_goomba_t) { 0 };
 	entity_init(&entity->base, ENTITY_GOOMBA, level, 8, 6);
 }
 
@@ -973,7 +975,7 @@ void game_init(const char* window_title, game_t* game) {
 
 	// first level init
 	game->level = malloc(sizeof(level_t));
-	level_init(game->level, "cave", BLACK_SKY, 48, 16);
+	level_init(game->level, "overworld", BLACK_SKY, 48, 16);
 
 	// create rendering surface 
 	RenderTexture2D render_texture = LoadRenderTexture(SCREEN_WIDTH, SCREEN_HEIGHT);
@@ -1070,6 +1072,7 @@ void level_update(level_t* level, game_t* game) {
 	level_update_entities(level);
 	level_update_camera(&level->camera, &level->player.body, &level->tilemap);
 	level->background.x = -level->camera.x;
+	level->background.y = ((float)(-level->camera.y) / 2.0f) - 128;
 }
 
 void level_draw(level_t* level, render_context_t* context) {
@@ -1163,27 +1166,23 @@ void player_jump(player_t* player) {
 }
 
 void player_move(player_t* player, level_t* level, controller_state_t* controller) {
-	static const float decel = 0.0625f;
-	static const float decel_air = 0.0125f;
+	static const float decel = 1.0f / 16.0f;
+	static const float decel_air = 1.0f / 80.0f;
 	static const float accel = 0.09375f;
 	static const float turn = 0.15625f;
 	static const float turn_air = 0.15625f;
 	static const float grav_jump = 0.1875f;
 	static const float grav_fall = 0.375f;
 
-	if (player->body.yspd > 0 || player->body.yspd < 0 && !controller->current.a) {
-		player->body.grav = grav_fall;
-	}
-	else {
-		player->body.grav = grav_jump;
-	}
+	player->body.grav = (player->body.yspd > 0 || player->body.yspd < 0 && !controller->current.a) ? grav_fall : grav_jump;
 
 	if (player->body.grounded && controller->current.a && !controller->previous.a) {
 		player_jump(player);
 	}
 
 	float h = controller->current.h;
-	float traction = 1.0f;
+	float traction = 1.0f; // ice would be something like 0.2
+
 	// player speed can be changed any time on ground, or when the player is in the air and sign of input = spd
 	if ((player->body.grounded) || ((!player->body.grounded && h * player->body.xspd >= 0))) {
 		if (controller->current.b && fabsf(player->body.xspd) >= WALK_SPEED && h * player->body.xspd > 0) {
@@ -1232,18 +1231,11 @@ void player_move(player_t* player, level_t* level, controller_state_t* controlle
 		}
 	}
 	// no input held down- slow player
-	else {
-		if (player->body.xspd > 0) {
-			player->body.xspd -= (player->body.grounded) ? decel : decel_air;
-			if (player->body.xspd < 0) {
-				player->body.xspd = 0;
-			}
-		}
-		else if (player->body.xspd < 0) {
-			player->body.xspd += (player->body.grounded) ? decel : decel_air;
-			if (player->body.xspd > 0) {
-				player->body.xspd = 0;
-			}
+	else if (player->body.xspd != 0) {
+		float xspd_dir = (player->body.xspd > 0) ? 1.0f : -1.0f; // which way the player is moving
+		player->body.xspd -= ((player->body.grounded) ? decel : decel_air) * xspd_dir;
+		if (player->body.xspd * xspd_dir < 0) {
+			player->body.xspd = 0;
 		}
 	}
 
