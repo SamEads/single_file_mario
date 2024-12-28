@@ -17,26 +17,34 @@ struct sounds {
 
 #pragma region Defines
 
-#define DEBUG
-
-typedef long entity_id_t;
+#define DEV
+#define EDIT_MODE
+#define LOG_PRINT false
 
 // resource related defines
-#define WINDOW_CAPTION 			"Super Mario World"
-#ifdef DEBUG
-#define WINDOW_CAPTION_DEBUG	WINDOW_CAPTION " [DEBUG]"
+#ifdef EDIT_MODE
+#define WINDOW_CAPTION 			"Solar Sorcery"
 #else
-#define WINDOW_CAPTION_DEBUG 	""
+#define WINDOW_CAPTION 			"Super Mario World"
 #endif
 #define SPRITES_PATH 			"assets/sprites"
 #define SOUNDS_PATH 			"assets/sounds"
 #define BACKGROUNDS_PATH 		"assets/backgrounds"
 #define MAX_PATH_LEN 256
 
+#define GAME_WIDTH 256
+#define GAME_HEIGHT 224
+
 // game related defines
-#define SCREEN_WIDTH 256
-#define SCREEN_HEIGHT 224
+#ifdef EDIT_MODE
+#define INIT_SCREEN_WIDTH 854
+#define INIT_SCREEN_HEIGHT 480
+#else
+#define INIT_SCREEN_WIDTH GAME_WIDTH * 4
+#define INIT_SCREEN_HEIGHT GAME_WIDTH * 4
+#endif
 #define MAX_CONTROLLERS 4
+#define ENTITY_DEFAULT_ALLOCATION_SIZE 64
 
 // player speeds
 #define WALK_SPEED 1.25f
@@ -47,17 +55,24 @@ typedef long entity_id_t;
 #define BLUE_SKY	(Color) { 0, 99, 189, 255 }
 #define BLACK_SKY	(Color) { 0, 0, 0, 255 }
 
+#define EDITOR_BLUE_A ((Color) { .b = 96, .g = 18, .a = 255 })
+#define EDITOR_BLUE_B ((Color) { .b = 255, .g = 28, .a = 255 })
+
 // texture atlas defines
 #define TEXTURE_ATLAS_WIDTH 	512
 #define TEXTURE_ATLAS_HEIGHT 	512
 #define MAX_TEXTURE_NODES 		1024
 
+#define TILE_ATLAS_WIDTH 	1024
+#define TILE_ATLAS_HEIGHT 	1024
+#define MAX_TEXTURE_NODES 	8192
+
 // array list defines
 #define ARRAYLIST_NULL -1
 #define ARRAYLIST_SCALE_FACTOR 2
 
-#ifdef DEBUG
-#define printd(...) printf(__VA_ARGS__);
+#ifdef DEV
+#define printd(...) if (LOG_PRINT) printf(__VA_ARGS__);
 #else
 #define printd(...)
 #endif
@@ -133,6 +148,257 @@ void path_index(const char* src_loc, char* dest_loc) {
 
 #pragma endregion
 
+#pragma region GUI
+#ifdef DEV
+#ifndef RAYGUI_IMPLEMENTATION
+#define RAYGUI_IMPLEMENTATION
+#include <raygui.h>
+#include <styles/dark/style_dark.h>
+
+typedef struct floating_window {
+	const char title[512];
+	Vector2 position;
+	Vector2 content_size;
+	Vector2 window_size;
+	bool minimized;
+	bool moving;
+	bool resizing;
+	bool resizable;
+	bool force_scroll_y;
+	void (*draw_content)(Vector2, Vector2);
+	Vector2 scroll;
+} floating_window_t;
+
+void window_fit_to_screen(floating_window_t* window) {
+	if (window->position.x < 0) {
+		window->position.x = -(window->window_size.x / 2.0f);
+	}
+	if (window->position.x > GetScreenWidth() - window->window_size.x) {
+		window->position.x = GetScreenWidth() - (window->window_size.x / 2.0f);
+	}
+	if (window->position.y < 0) {
+		window->position.y = 0;
+	}
+	else if (window->position.y > GetScreenHeight()) {
+		window->position.y = GetScreenHeight() - ((!window->minimized) ? (window->window_size.y / 2.0f) : 24);
+	}
+}
+
+// https://github.com/raysan5/raygui/blob/master/examples/floating_window/floating_window.c
+void window_execute(floating_window_t* window) {
+#if !defined(RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT)
+#define RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT 24
+#endif
+
+#if !defined(RAYGUI_WINDOW_CLOSEBUTTON_SIZE)
+#define RAYGUI_WINDOW_CLOSEBUTTON_SIZE 18
+#endif
+
+	int close_title_size_delta_half = (RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT - RAYGUI_WINDOW_CLOSEBUTTON_SIZE) / 2;
+
+	// window movement and resize input and collision check
+	if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && !window->moving && !window->resizing) {
+		Vector2 mouse_position = GetMousePosition();
+
+		Rectangle title_collision_rect = { window->position.x, window->position.y, window->window_size.x - (RAYGUI_WINDOW_CLOSEBUTTON_SIZE + close_title_size_delta_half), RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT };
+		Rectangle resize_collision_rect = { window->position.x + window->window_size.x - 20, window->position.y + window->window_size.y - 20, 20, 20 };
+
+		if (CheckCollisionPointRec(mouse_position, title_collision_rect)) {
+			window->moving = true;
+		}
+		else if (window->resizable && !window->minimized && CheckCollisionPointRec(mouse_position, resize_collision_rect)) {
+			window->resizing = true;
+		}
+	}
+
+	// window movement and resize update
+	if (window->moving) {
+		Vector2 mouse_delta = GetMouseDelta();
+		window->position.x += mouse_delta.x;
+		window->position.y += mouse_delta.y;
+
+		if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) {
+			window->moving = false;
+
+			// clamp window position keep it inside the application area
+			window_fit_to_screen(window);
+		}
+
+	}
+	else if (window->resizing) {
+		Vector2 mouse = GetMousePosition();
+		if (mouse.x > window->position.x)
+			window->window_size.x = mouse.x - window->position.x;
+		if (mouse.y > window->position.y)
+			window->window_size.y = mouse.y - window->position.y;
+
+		// clamp window size to an arbitrary minimum value and the window size as the maximum
+		if (window->window_size.x < 100) window->window_size.x = 100;
+		else if (window->window_size.x > GetScreenWidth()) window->window_size.x = GetScreenWidth();
+		if (window->window_size.y < 100) window->window_size.y = 100;
+		else if (window->window_size.y > GetScreenHeight()) window->window_size.y = GetScreenHeight();
+
+		if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) {
+			window->resizing = false;
+		}
+	}
+	else {
+		window_fit_to_screen(window);
+	}
+
+	// window and content drawing with scissor and scroll area
+	if (window->minimized) {
+		GuiStatusBar((Rectangle) { window->position.x, window->position.y, window->window_size.x, RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT }, window->title);
+
+		if (GuiButton((Rectangle) {
+			window->position.x + window->window_size.x - RAYGUI_WINDOW_CLOSEBUTTON_SIZE - close_title_size_delta_half,
+				window->position.y + close_title_size_delta_half,
+				RAYGUI_WINDOW_CLOSEBUTTON_SIZE,
+				RAYGUI_WINDOW_CLOSEBUTTON_SIZE
+		},
+			"#120#")) {
+			window->minimized = false;
+		}
+		return;
+	}
+	else {
+		window->minimized = GuiWindowBox((Rectangle) { window->position.x, window->position.y, window->window_size.x, window->window_size.y }, window->title);
+
+		// scissor and draw content within a scroll panel
+		if (window->draw_content != NULL) {
+			
+			window->scroll.y += -GetMouseWheelMove() * 16;
+			if (window->scroll.y < 0) {
+				window->scroll.y = 0;
+			}
+			if (window->scroll.y > 1024 - 256) {
+				window->scroll.y = 1024 - 256;
+			}
+
+			if (window->resizable) {
+				Rectangle scissor = { 0 };
+				GuiScrollPanel((Rectangle) { window->position.x, window->position.y + RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT, window->window_size.x, window->window_size.y - RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT },
+					NULL,
+					(Rectangle) {
+					window->position.x, window->position.y, window->content_size.x, window->content_size.y
+				},
+					&window->scroll,
+					&scissor);
+
+				bool require_scissor = window->window_size.x < window->content_size.x || window->window_size.y < window->content_size.y;
+
+				if (require_scissor) {
+					BeginScissorMode(scissor.x, scissor.y, scissor.width, scissor.height);
+				}
+				window->draw_content(window->position, window->scroll);
+
+				if (require_scissor) {
+					EndScissorMode();
+				}
+			}
+			else {
+				if (window->force_scroll_y) {
+					BeginScissorMode(window->position.x, window->position.y + RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT, window->window_size.x, window->window_size.y - RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT);
+					window->draw_content(window->position, window->scroll);
+					window->scroll.y = GuiScrollBar((Rectangle) { window->position.x + window->window_size.x - 10 - 1, window->position.y + 24 + 1, 10, window->window_size.y - 24 - 2 }, window->scroll.y, 0, 1024 - 256);
+					EndScissorMode();
+				}
+				else {
+					window->draw_content(window->position, window->scroll);
+				}
+			}
+		}
+
+		if (window->resizable) {
+			GuiDrawIcon(71, window->position.x + window->window_size.x - 20, window->position.y + window->window_size.y - 20, 1, WHITE);
+		}
+	}
+}
+
+void floating_window_tiles(Vector2 position, Vector2 scroll) {
+	DrawRectangleGradientV(position.x + 1, position.y + 24, 16 * 16, 16 * 16, EDITOR_BLUE_A, EDITOR_BLUE_B);
+	int static_scroll = (int)(scroll.y / 16.0f) * 16;
+	for (int i = 0; i < 16; ++i) {
+		for (int j = 0; j < 16; ++j) {
+			DrawRectangleLinesEx((Rectangle) { position.x + 1 + (i << 4), position.y + 24 + (j << 4) - static_scroll, 16, 16 }, 1, RED);
+		}
+		for (int j = 0; j < 16; ++j) {
+			DrawRectangleLinesEx((Rectangle) { position.x + 1 + (i << 4), position.y + 24 + 256 + (j << 4) - static_scroll, 16, 16 }, 1, GREEN);
+		}
+		for (int j = 0; j < 16; ++j) {
+			DrawRectangleLinesEx((Rectangle) { position.x + 1 + (i << 4), position.y + 24 + 512 + (j << 4) - static_scroll, 16, 16 }, 1, ORANGE);
+		}
+		for (int j = 0; j < 16; ++j) {
+			DrawRectangleLinesEx((Rectangle) { position.x + 1 + (i << 4), position.y + 24 + 512 + 256 + (j << 4) - static_scroll, 16, 16 }, 1, PURPLE);
+		}
+	}
+}
+
+typedef struct editor {
+	int x;
+	float zoom;
+	Texture2D background;
+	floating_window_t tiles_window;
+	floating_window_t entities_window;
+} editor_t;
+
+void editor_draw(editor_t* editor) {
+	if (IsKeyDown(KEY_LEFT_CONTROL)) {
+		if (IsKeyPressed(KEY_ZERO)) {
+			editor->zoom = 1.0f;
+		}
+		else {
+			editor->zoom += GetMouseWheelMove() / 10.0f;
+			editor->zoom = CLAMP(editor->zoom, 1, 4);
+		}
+	}
+
+	int w = GetScreenWidth(), h = GetScreenHeight();
+
+	// toolbar
+	GuiDrawRectangle((Rectangle) { 0, 0, w, 24 }, GuiGetStyle(STATUSBAR, BORDER_WIDTH), GetColor(GuiGetStyle(STATUSBAR, BORDER)), GetColor(GuiGetStyle(STATUSBAR, BASE)));
+	
+	int offset_size = 12;
+	int _o = 8;
+	const char* labels[4] = { "File", "Edit", "View", "Options" };
+	for (int i = 0; i < 4; ++i) {
+		int _w = GetTextWidth(labels[i]);
+		GuiLabel((Rectangle) { _o, 0, _w, 24 }, labels[i]);
+		if (i < 3) _o += _w + offset_size;
+	}
+
+	// body
+	if (editor->background.id == 0) {
+		editor->background = LoadTexture("assets/backgrounds/overworld.png");
+		SetTextureWrap(editor->background, TEXTURE_WRAP_REPEAT);
+	}
+
+	if ((float)((int)editor->zoom * 100.0f) != (int)(editor->zoom * 100.0f)) {
+		SetTextureFilter(editor->background, TEXTURE_FILTER_BILINEAR);
+	}
+	else {
+		SetTextureFilter(editor->background, TEXTURE_FILTER_POINT);
+	}
+
+	DrawTexturePro(
+		editor->background,
+		(Rectangle) { .width = w, .height = editor->background.height },
+		(Rectangle) { .y = 24, .width = w * editor->zoom, .height = editor->background.height * editor->zoom },
+		(Vector2) { 0, 0 }, 0, WHITE
+	);
+
+	// footer
+	GuiStatusBar((Rectangle) { 0, h - 24, 200, 24 }, "Invalid editor region.");
+	GuiStatusBar((Rectangle) { 200, h - 24, w - 200, 24 }, TextFormat("Zoom: %i%%", (int)(editor->zoom * 100.0f)));
+
+	// top window thing
+	window_execute(&editor->tiles_window);
+}
+
+#endif
+#endif
+#pragma endregion
+
 #pragma region Array List
 
 #define ARRAYLIST_DEFINE(type, type_name) \
@@ -161,6 +427,9 @@ void type_name##_arraylist_remove(type_name##_arraylist_t* list, int index) { \
     if (index < 0 || index >= list->count) return; \
     for (int i = index; i < list->count - 1; i++) list->data[i] = list->data[i + 1]; /* pushes data to the left */ \
     --list->count; \
+} \
+void type_name##arraylist_sort() { \
+	\
 }
 
 ARRAYLIST_DEFINE(Rectangle, rectangle)
@@ -258,7 +527,8 @@ void controller_state_update(controller_state_t* state) {
 #pragma region Render Context
 
 struct render_context {
-	Texture2D sprite_atlas;
+	Texture sprite_atlas;
+	RenderTexture render_texture;
 };
 
 #pragma endregion
@@ -269,7 +539,7 @@ typedef struct background {
 	float x, y;
 	float parallax_x;
 	float parallax_y;
-	Texture2D tex;
+	Texture tex;
 	bool clamp_x;
 	bool clamp_y;
 } background_t;
@@ -305,11 +575,11 @@ void background_init(const char* res_loc, background_t* background, bool tiled) 
 void background_draw(background_t* background) {
 	int bg_x = (int)(background->x * background->parallax_x) % background->tex.width;
 
-	Rectangle bg_rect = (Rectangle) { 0, 0, GetScreenWidth(), GetScreenHeight() };
+	Rectangle bg_rect = (Rectangle) { 0, 0, GAME_WIDTH, GAME_HEIGHT };
 	Rectangle screen_rect = (Rectangle) { bg_x, background->y * background->parallax_y, bg_rect.width, bg_rect.height };
 	if (background->clamp_y) {
-		if (screen_rect.y < -background->tex.height + SCREEN_HEIGHT) {
-			screen_rect.y = -background->tex.height + SCREEN_HEIGHT;
+		if (screen_rect.y < -background->tex.height + GAME_HEIGHT) {
+			screen_rect.y = -background->tex.height + GAME_HEIGHT;
 		}
 		else if (screen_rect.y > 0) {
 			screen_rect.y = 0;
@@ -481,7 +751,7 @@ void sprite_init(const char* res_loc, sprite_t* sprite, Image* atlas_img, stbrp_
     }
 
 close_file:
-#ifdef DEBUG
+#ifdef DEV
 	if (sprite->order) {
 		printd("Loaded sprite [%s] with [%d] frames and pre-defined order of [", res_loc, sprite->frame_count);
 		for (int i = 0; i < sprite->order_count; ++i) {
@@ -516,7 +786,7 @@ void font_init(const char* res_loc, const char* order, font_t* font, Image* atla
 	sprite_init(res_loc, &font->sprite_data, atlas, rect_packer);
 	int order_len = strlen(order);
 	memcpy((void*)font->order, order, (size_t)order_len + 1);
-#ifdef DEBUG
+#ifdef DEV
 	printd("Font [%s] order: [", res_loc);
 	for (int i = 0; i < order_len; ++i) {
 		printd("%c", font->order[i]);
@@ -580,8 +850,6 @@ struct mario_sprites {
 	sprite_t ride[2];
 	sprite_t slide[2];
 } mario_sprites;
-
-Texture2D cheat_tileset;
 
 #pragma endregion
 
@@ -731,6 +999,8 @@ void physics_body_update(physics_body_t* body, tilemap_t* tilemap) {
 
 #pragma region Entity
 
+typedef long long entity_id_t;
+
 typedef enum entity_type {
 	ENTITY_NONE = -1,
 	ENTITY_GOOMBA = 0,
@@ -767,8 +1037,9 @@ struct player {
 #pragma region Level Struct, Init, & Free
 
 typedef struct camera {
-	int x;
-	int y;
+	int x, y;
+	int offset_x, offset_y;
+	int width, height;
 } camera_t;
 
 struct level {
@@ -781,24 +1052,31 @@ struct level {
 	camera_t camera;
 };
 
-void level_init(level_t* level, const char* background_res, Color background_color, int width, int height) {
-	*level = (level_t) { 0 };
+void level_init(level_t* level, const char* background_res, Color background_color, int width_in_tiles, int height_in_tiles, int tile_size) {
+	*level = (level_t) { 
+		.background_color = background_color,
+		.camera = (camera_t) {
+			.offset_x = (-GAME_WIDTH / 2.0f),
+			.offset_y = (-GAME_HEIGHT / 2.0f),
+			.width = GAME_WIDTH,
+			.height = GAME_HEIGHT
+		}
+	};
 
 	// entities
 	player_init(&level->player);
-	entityptr_arraylist_init(&level->entities, 64);
+	entityptr_arraylist_init(&level->entities, ENTITY_DEFAULT_ALLOCATION_SIZE);
 	
 	// bg
 	background_init(background_res, &level->background, true);
-	level->background.y = -level->background.tex.height + SCREEN_HEIGHT;
+	level->background.y = -level->background.tex.height + GAME_HEIGHT;
 	level->background.clamp_x = false;
 	level->background.clamp_y = true;
 	level->background.parallax_x = 0.5f;
 	level->background.parallax_y = 1.0f;
-	level->background_color = background_color;
 
 	// tilemap (temporary. delegated to a file type eventually)
-	tilemap_init(&level->tilemap, width, height, 16);
+	tilemap_init(&level->tilemap, width_in_tiles, height_in_tiles, tile_size);
 	for (int i = 0; i <= 7; ++i) {
 		tilemap_set(&level->tilemap, i, 14, (tile_t) { .collision = COLLISION_SOLID });
 	}
@@ -897,10 +1175,8 @@ struct game {
 };
 
 void game_update(game_t* game) {
-	// update controllers
-	for (int i = 0; i < 1 /* stand in for controller count since we're only accounting for p1 */; ++i) {
-		controller_state_t* state = &game->controllers[i];
-		controller_state_update(state);
+	for (int i = 0; i < game->controller_count; ++i) {
+		controller_state_update(&game->controllers[i]);
 	}
 
 	if (game->level) {
@@ -920,30 +1196,22 @@ void game_init(const char* window_title, game_t* game) {
 
 	// start window
 	SetTraceLogLevel(LOG_NONE);
-	InitWindow(SCREEN_WIDTH * 4, SCREEN_HEIGHT * 4, window_title);
+#ifdef EDIT_MODE
+	SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+#endif
+	InitWindow(INIT_SCREEN_WIDTH, INIT_SCREEN_HEIGHT, window_title);
 	InitAudioDevice();
 	SetTargetFPS(60);
-	sounds.bump = LoadSound("assets/sounds/bump.wav");
-	sounds.jump = LoadSound("assets/sounds/jump.wav");
 
-	// initialization would be something like this for an entity
-	entity_goomba_t goomba = (entity_goomba_t) {
-		.base = {
-			.id = 1,
-			.type = ENTITY_GOOMBA,
-			.update = goomba_update,
-			.draw = goomba_draw
-		}
-	};
-
-	// controller set-up
-	game->controller_count = 1;
-	game->controllers = calloc(MAX_CONTROLLERS, sizeof(controller_state_t));
+	Image icon = LoadImage("assets/icon_editor.png");
+	SetWindowIcon(icon);
+	UnloadImage(icon);
 
 	// atlas image
 	// todo: asset loading automation!
-	Image atlas_img = GenImageColor(TEXTURE_ATLAS_WIDTH, TEXTURE_ATLAS_HEIGHT, (Color) { 255, 255, 255, 0 });
 	{
+		Image atlas_img = GenImageColor(TEXTURE_ATLAS_WIDTH, TEXTURE_ATLAS_HEIGHT, (Color) { 255, 255, 255, 0 });
+
 		stbrp_context rect_packer;
 		stbrp_node* n = malloc(sizeof(stbrp_node) * MAX_TEXTURE_NODES);
 		stbrp_init_target(&rect_packer, TEXTURE_ATLAS_WIDTH, TEXTURE_ATLAS_HEIGHT, n, MAX_TEXTURE_NODES);
@@ -963,29 +1231,99 @@ void game_init(const char* window_title, game_t* game) {
 		font_init("font.hud", "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.,*-!@|=:", &fnt_hud, &atlas_img, &rect_packer);
 		fnt_hud.spacing = 0;
 
-		cheat_tileset = LoadTexture("assets/tiles/cheat.png");
-
 		free(n);
+
+		game->render_context.sprite_atlas = LoadTextureFromImage(atlas_img);
+
+		ExportImage(atlas_img, "sprite_atlas_dump.png");
+		UnloadImage(atlas_img);
+	}
+	{
+		Image atlas_img = GenImageColor(TILE_ATLAS_WIDTH, TILE_ATLAS_HEIGHT, (Color) { 255, 255, 255, 0 });
+
+		stbrp_context rect_packer;
+		stbrp_node* n = malloc(sizeof(stbrp_node) * MAX_TEXTURE_NODES);
+		stbrp_init_target(&rect_packer, TILE_ATLAS_WIDTH, TILE_ATLAS_HEIGHT, n, MAX_TEXTURE_NODES);
+
+		Image tls = LoadImage("assets/tiles/glade.png");
+		for (int i = 0; i < tls.width / 16; ++i) {
+			for (int j = 0; j < tls.height / 16; ++j) {
+				bool has_img_data = false;
+				for (int x = 0; x < 16; ++x) {
+					for (int y = 0; y < 16; ++y) {
+						Color c_at = GetImageColor(tls, (i * 16) + x, (j * 16) + y);
+						if (c_at.a != 0) {
+							has_img_data = true;
+						}
+					}
+				}
+				if (!has_img_data) {
+					continue;
+				}
+				stbrp_rect r = { .w = 16, .h = 16 };
+				if (stbrp_pack_rects(&rect_packer, &r, 1)) {
+					ImageDraw(&atlas_img, tls, (Rectangle) { (i * 16), (j * 16), 16, 16 }, (Rectangle) { r.x, r.y, 16, 16 }, WHITE);
+				}
+			}
+		}
+
+		ExportImage(atlas_img, "tile_atlas_dump.png");
+		UnloadImage(atlas_img);
 	}
 
-	game->render_context.sprite_atlas = LoadTextureFromImage(atlas_img);
+#ifdef EDIT_MODE
+	GuiLoadStyleDark();
+	editor_t editor = (editor_t) {
+		.zoom = 1.0f,
+		.tiles_window = (floating_window_t) {
+			.title = "Map Tile Selector",
+			.draw_content = floating_window_tiles,
+			.force_scroll_y = true,
+			.content_size = (Vector2) { 256 },
+			.position = (Vector2) { 0 },
+			.window_size = (Vector2) { 256 + 2 + 10, 256 + 24 + 1 },
+		}
+	};
+	while (!WindowShouldClose()) {
+		BeginDrawing();
+		ClearBackground(BLACK);
+		editor_draw(&editor);
+		EndDrawing();
+	}
+#else
+	sounds = (struct sounds) {
+		.bump = LoadSound("assets/sounds/bump.wav"),
+		.jump = LoadSound("assets/sounds/jump.wav")
+	};
 
-	ExportImage(atlas_img, "sprite_atlas_dump.png");
-	UnloadImage(atlas_img);
+	// initialization would be something like this for an entity:
+	entity_goomba_t goomba = (entity_goomba_t){
+		.base = {
+			.id = 1,
+			.type = ENTITY_GOOMBA,
+			.update = goomba_update,
+			.draw = goomba_draw
+		}
+	};
+
+	// controller set-up
+	game->controller_count = 1;
+	game->controllers = calloc(MAX_CONTROLLERS, sizeof(controller_state_t));
 
 	// first level init
 	game->level = malloc(sizeof(level_t));
-	level_init(game->level, "overworld", BLACK_SKY, 48, 16);
+	level_init(game->level, "overworld", BLACK_SKY, 48, 16, 16);
 
 	// create rendering surface 
-	RenderTexture2D render_texture = LoadRenderTexture(SCREEN_WIDTH, SCREEN_HEIGHT);
-	RenderTexture2D hud_texture = LoadRenderTexture(SCREEN_WIDTH, SCREEN_HEIGHT);
+	game->render_context.render_texture = LoadRenderTexture(GAME_WIDTH, GAME_HEIGHT);
+	RenderTexture hud_texture = LoadRenderTexture(GAME_WIDTH, GAME_HEIGHT);
+
 	while (!WindowShouldClose()) {
 		// update
 		game_update(game);
 
 		// draw game to render target
-		BeginTextureMode(render_texture);
+		BeginTextureMode(game->render_context.render_texture);
 		if (game->level != NULL) {
 			ClearBackground(game->level->background_color);
 		}
@@ -999,12 +1337,19 @@ void game_init(const char* window_title, game_t* game) {
 		// draw render target to screen
 		BeginDrawing();
 		ClearBackground(BLACK);
-		DrawTexturePro(render_texture.texture, (Rectangle) { 0, 0, render_texture.texture.width, -render_texture.texture.height }, (Rectangle) { 0, 0, GetScreenWidth(), -GetScreenHeight() }, (Vector2) { 0, 0 }, 0, WHITE);
+		DrawTexturePro(
+			game->render_context.render_texture.texture,
+			(Rectangle) { 0, 0, game->render_context.render_texture.texture.width, -game->render_context.render_texture.texture.height },				// src rec
+			(Rectangle) { 0, 0, game->render_context.render_texture.texture.width * 4.0f, -game->render_context.render_texture.texture.height * 4.0f }, // dest rec
+			(Vector2) { 0, 0 }, 0, WHITE); // origin, rotation, blend color
 		DrawTexturePro(hud_texture.texture, (Rectangle) { 0, 0, hud_texture.texture.width, -hud_texture.texture.height }, (Rectangle) { 0, 0, GetScreenWidth(), -GetScreenHeight() }, (Vector2) { 0, 0 }, 0, WHITE);
+
 		EndDrawing();
 	}
-	UnloadRenderTexture(render_texture);
+
+	UnloadRenderTexture(game->render_context.render_texture);
 	UnloadRenderTexture(hud_texture);
+#endif
 }
 
 void game_end(game_t* game) {
@@ -1034,43 +1379,15 @@ void level_update_entities(level_t* level) {
 	}
 }
 
-void level_update_camera(camera_t* camera, physics_body_t* actor_body, tilemap_t* tilemap) {
-	camera->x = actor_body->x;
-	camera->y = actor_body->y;
-
-	// camera update
-	int cam_x = camera->x;
-	int cam_y = camera->y;
-
-	int lw = tilemap->width * tilemap->tile_size;
-	int lh = tilemap->height * tilemap->tile_size;
-
-	// clamp to level bounds
-	int half_width = SCREEN_WIDTH / 2;
-	int half_height = SCREEN_HEIGHT / 2;
-	// x clamp
-	if (cam_x < half_width) {
-		cam_x = half_width;
-	}
-	else if (cam_x > lw - half_width) {
-		cam_x = lw - half_width;
-	}
-	// y clamp
-	if (cam_y < half_height) {
-		cam_y = half_height;
-	}
-	else if (cam_y > lh - half_height) {
-		cam_y = lh - half_height;
-	}
-
-	camera->x = cam_x - half_width;
-	camera->y = cam_y - half_height;
+void camera_set_position(camera_t* camera, int x, int y, tilemap_t* tilemap_bounds) {
+	camera->x = CLAMP(x + camera->offset_x, 0, (tilemap_bounds->width * tilemap_bounds->tile_size) - camera->width);
+	camera->y = CLAMP(y + camera->offset_y, 0, (tilemap_bounds->height * tilemap_bounds->tile_size) - camera->height);
 }
 
 void level_update(level_t* level, game_t* game) {
 	player_update(&level->player, level, &game->controllers[0]);
 	level_update_entities(level);
-	level_update_camera(&level->camera, &level->player.body, &level->tilemap);
+	camera_set_position(&level->camera, level->player.body.x, level->player.body.y, &level->tilemap);
 	level->background.x = -level->camera.x;
 	level->background.y = ((float)(-level->camera.y) / 2.0f) - 128;
 }
@@ -1084,8 +1401,8 @@ void level_draw(level_t* level, render_context_t* context) {
 	//DrawTexture(cheat_tileset, 0, 0, WHITE);
 
 	int tile_size = level->tilemap.tile_size;
-	int cam_tile_x1 = level->camera.x / level->tilemap.tile_size, cam_tile_x2 = (level->camera.x + SCREEN_WIDTH) / (float)tile_size;
-	int cam_tile_y1 = level->camera.y / level->tilemap.tile_size, cam_tile_y2 = (level->camera.y + SCREEN_HEIGHT) / (float)tile_size;
+	int cam_tile_x1 = level->camera.x / level->tilemap.tile_size, cam_tile_x2 = (level->camera.x + GAME_WIDTH) / (float)tile_size;
+	int cam_tile_y1 = level->camera.y / level->tilemap.tile_size, cam_tile_y2 = (level->camera.y + GAME_HEIGHT) / (float)tile_size;
 
 	BeginBlendMode(BLEND_ADDITIVE);
 	for (int i = cam_tile_x1; i <= cam_tile_x2; ++i) {
@@ -1251,6 +1568,6 @@ void player_update(player_t* player, level_t* level, controller_state_t* control
 
 int main(int argc, char** argv) {
 	game_t game;
-	game_init(WINDOW_CAPTION WINDOW_CAPTION_DEBUG, &game);
+	game_init(WINDOW_CAPTION, &game);
 	game_end(&game);
 }
