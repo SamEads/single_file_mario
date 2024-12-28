@@ -5,6 +5,7 @@
 #include <stb_rect_pack.h>
 #include <string.h>
 #include <math.h>
+#include <stddef.h>
 
 #pragma region Sounds [ Temporary. Should be passed by context ]
 
@@ -17,9 +18,9 @@ struct sounds {
 
 #pragma region Defines
 
-#define DEV
 #define EDIT_MODE
-#define LOG_PRINT false
+#define DEV
+#define LOG_PRINT true
 
 // resource related defines
 #ifdef EDIT_MODE
@@ -37,7 +38,7 @@ struct sounds {
 
 // game related defines
 #ifdef EDIT_MODE
-#define INIT_SCREEN_WIDTH 854
+#define INIT_SCREEN_WIDTH 640
 #define INIT_SCREEN_HEIGHT 480
 #else
 #define INIT_SCREEN_WIDTH GAME_WIDTH * 4
@@ -47,16 +48,16 @@ struct sounds {
 #define ENTITY_DEFAULT_ALLOCATION_SIZE 64
 
 // player speeds
-#define WALK_SPEED 1.25f
-#define RUN_SPEED 2.25f
+#define WALK_SPEED 	1.25f
+#define RUN_SPEED 	2.25f
 
 // background colors
 #define ORANGE_SKY	(Color) { 255, 231, 181, 255 }
 #define BLUE_SKY	(Color) { 0, 99, 189, 255 }
 #define BLACK_SKY	(Color) { 0, 0, 0, 255 }
 
-#define EDITOR_BLUE_A ((Color) { .b = 96, .g = 18, .a = 255 })
-#define EDITOR_BLUE_B ((Color) { .b = 255, .g = 28, .a = 255 })
+#define EDITOR_BLUE_A ((Color) { .b = 58, .r = 128, .g = 40, .a = 255 })
+#define EDITOR_BLUE_B ((Color) { .b = 96, .r = 255, .g = 128, .a = 255 })
 
 // texture atlas defines
 #define TEXTURE_ATLAS_WIDTH 	512
@@ -65,7 +66,7 @@ struct sounds {
 
 #define TILE_ATLAS_WIDTH 	1024
 #define TILE_ATLAS_HEIGHT 	1024
-#define MAX_TEXTURE_NODES 	8192
+#define MAX_TILE_NODES 		8192
 
 // array list defines
 #define ARRAYLIST_NULL -1
@@ -76,6 +77,9 @@ struct sounds {
 #else
 #define printd(...)
 #endif
+
+#define static_cast(target_type, ptr) \
+	(target_type*)((char*)(ptr) - offsetof(target_type, base))
 
 #pragma endregion
 
@@ -148,6 +152,28 @@ void path_index(const char* src_loc, char* dest_loc) {
 
 #pragma endregion
 
+#pragma region Rectangle bounds
+
+bool point_in_rectangle(Vector2 p, Rectangle r) {
+	return CheckCollisionPointRec(p, r);
+}
+
+bool rectangle_collision(Rectangle r1, Rectangle r2) {
+	return ((r1.x < (r2.x + r2.width) && (r1.x + r1.width) > r2.x) &&
+			(r1.y < (r2.y + r2.height) && (r1.y + r1.height) > r2.y));
+}
+
+bool rectangle_collision_list(Rectangle base_rect, Rectangle* recs, int num_rects) {
+	for (int i = 0; i < num_rects; ++i) {
+		if (rectangle_collision(base_rect, recs[i])) {
+			return true;
+		}
+	}
+	return false;
+}
+
+#pragma endregion
+
 #pragma region GUI
 #ifdef DEV
 #ifndef RAYGUI_IMPLEMENTATION
@@ -155,19 +181,75 @@ void path_index(const char* src_loc, char* dest_loc) {
 #include <raygui.h>
 #include <styles/dark/style_dark.h>
 
-typedef struct floating_window {
-	const char title[512];
+struct floating_window;
+
+struct floating_window {
+	const char title[128];
 	Vector2 position;
-	Vector2 content_size;
 	Vector2 window_size;
 	bool minimized;
 	bool moving;
 	bool resizing;
 	bool resizable;
 	bool force_scroll_y;
-	void (*draw_content)(Vector2, Vector2);
+	void (*draw_content)(struct floating_window*, Vector2, Vector2);
 	Vector2 scroll;
-} floating_window_t;
+};
+
+typedef struct floating_window floating_window_t;
+
+typedef struct tilemap_window {
+	floating_window_t base;
+	Texture2D tilemap;
+	int timer;
+	Vector2 selected_tile;
+} tilemap_window_t;
+
+void floating_window_tiles(floating_window_t* window, Vector2 size, Vector2 mouse_position) {
+	// cast to tilemap window
+	tilemap_window_t* tilemap_window = static_cast(tilemap_window_t, window);
+
+	// deep blue bg
+	DrawRectangleGradientV(0, 0, size.x, size.y, EDITOR_BLUE_A, EDITOR_BLUE_B);
+	
+	// tilemap texture
+	DrawTexture(tilemap_window->tilemap, 0, 0, WHITE);
+	
+	if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+		tilemap_window->selected_tile = (Vector2) { (int)mouse_position.x >> 4, (int)mouse_position.y >> 4 };
+	}
+
+	// draw inverted rectangle inside of selected tile bounds
+	BeginBlendMode(BLEND_SUBTRACT_COLORS);
+	DrawRectangle(tilemap_window->selected_tile.x * 16, tilemap_window->selected_tile.y * 16, 16, 16, (Color) { 0, 255, 255, 0 });
+	EndBlendMode();
+
+	// selected tile
+	{
+		int grid_x = ((int)mouse_position.x >> 4) << 4;
+		int grid_y = ((int)mouse_position.y >> 4) << 4;
+		// mouse not in window, put lined rectangle on the selected tile slot
+		if (!point_in_rectangle(mouse_position, (Rectangle) { 0, 0, size.x, size.y })) {
+			grid_x = (int)tilemap_window->selected_tile.x << 4;
+			grid_y = (int)tilemap_window->selected_tile.y << 4;
+		}
+
+		// highlight (circulating black/white lines)
+		for (int i = 0; i < 16; i++) {
+			Color col = (((tilemap_window->timer / 4) + i) % 4 < 2) ? WHITE : BLACK;
+			Color col_rev = (((tilemap_window->timer / 4) - i) % 4 < 2) ? WHITE : BLACK;
+			DrawRectangle(grid_x + i, grid_y, 1, 1, col_rev);		// top
+			DrawRectangle(grid_x, grid_y + i, 1, 1, col);			// left
+			DrawRectangle(grid_x + 15, grid_y + i, 1, 1, col_rev);	// right
+			DrawRectangle(grid_x + i, grid_y + 15, 1, 1, col);		// bottom
+		}
+	}
+
+	// shadow overlay at the bottom of the window
+	DrawRectangleGradientV(0, size.y - 64, size.x, 64, (Color) { 0, 0, 0, 0 }, (Color) { 0, 0, 0, 64 });
+
+	++tilemap_window->timer;
+}
 
 void window_fit_to_screen(floating_window_t* window) {
 	if (window->position.x < 0) {
@@ -186,29 +268,35 @@ void window_fit_to_screen(floating_window_t* window) {
 
 // https://github.com/raysan5/raygui/blob/master/examples/floating_window/floating_window.c
 void window_execute(floating_window_t* window) {
-#if !defined(RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT)
-#define RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT 24
-#endif
-
+	if (window->minimized) {
+		return;
+	}
 #if !defined(RAYGUI_WINDOW_CLOSEBUTTON_SIZE)
 #define RAYGUI_WINDOW_CLOSEBUTTON_SIZE 18
 #endif
 
 	int close_title_size_delta_half = (RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT - RAYGUI_WINDOW_CLOSEBUTTON_SIZE) / 2;
+	Vector2 mouse_position = GetMousePosition();
+	Rectangle resize_collision_rect = { window->position.x + window->window_size.x - 20, window->position.y + window->window_size.y - 20, 20, 20 };
+	bool in_resize_range = CheckCollisionPointRec(mouse_position, resize_collision_rect);
 
 	// window movement and resize input and collision check
 	if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && !window->moving && !window->resizing) {
-		Vector2 mouse_position = GetMousePosition();
 
 		Rectangle title_collision_rect = { window->position.x, window->position.y, window->window_size.x - (RAYGUI_WINDOW_CLOSEBUTTON_SIZE + close_title_size_delta_half), RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT };
-		Rectangle resize_collision_rect = { window->position.x + window->window_size.x - 20, window->position.y + window->window_size.y - 20, 20, 20 };
 
 		if (CheckCollisionPointRec(mouse_position, title_collision_rect)) {
 			window->moving = true;
 		}
-		else if (window->resizable && !window->minimized && CheckCollisionPointRec(mouse_position, resize_collision_rect)) {
+		else if (window->resizable && !window->minimized && in_resize_range) {
 			window->resizing = true;
 		}
+	}
+
+	if (window->resizing || in_resize_range) {
+		SetMouseCursor(MOUSE_CURSOR_RESIZE_NWSE);
+	} else {
+		SetMouseCursor(MOUSE_CURSOR_DEFAULT);
 	}
 
 	// window movement and resize update
@@ -277,59 +365,27 @@ void window_execute(floating_window_t* window) {
 
 			if (window->resizable) {
 				Rectangle scissor = { 0 };
-				GuiScrollPanel((Rectangle) { window->position.x, window->position.y + RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT, window->window_size.x, window->window_size.y - RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT },
-					NULL,
-					(Rectangle) {
-					window->position.x, window->position.y, window->content_size.x, window->content_size.y
-				},
-					&window->scroll,
-					&scissor);
 
-				bool require_scissor = window->window_size.x < window->content_size.x || window->window_size.y < window->content_size.y;
+				int off_x = (int) window->position.x + 1;
+				int off_y = (int) window->position.y + 24;
 
-				if (require_scissor) {
-					BeginScissorMode(scissor.x, scissor.y, scissor.width, scissor.height);
-				}
-				window->draw_content(window->position, window->scroll);
+				float mp_x = mouse_position.x - off_x;
+				float mp_y = mouse_position.y - off_y;
 
-				if (require_scissor) {
-					EndScissorMode();
-				}
-			}
-			else {
-				if (window->force_scroll_y) {
-					BeginScissorMode(window->position.x, window->position.y + RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT, window->window_size.x, window->window_size.y - RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT);
-					window->draw_content(window->position, window->scroll);
-					window->scroll.y = GuiScrollBar((Rectangle) { window->position.x + window->window_size.x - 10 - 1, window->position.y + 24 + 1, 10, window->window_size.y - 24 - 2 }, window->scroll.y, 0, 1024 - 256);
-					EndScissorMode();
-				}
-				else {
-					window->draw_content(window->position, window->scroll);
-				}
+				BeginScissorMode(off_x, off_y, window->window_size.x - 2, window->window_size.y - 24 - 1 );
+
+				rlPushMatrix();
+				rlTranslatef(off_x, off_y, 0.0f);
+				window->draw_content(window, (Vector2) { window->window_size.x - 2, window->window_size.y - 24 - 1 }, (Vector2) { mp_x, mp_y });
+				rlPopMatrix();
+
+				EndScissorMode();
 			}
 		}
 
 		if (window->resizable) {
-			GuiDrawIcon(71, window->position.x + window->window_size.x - 20, window->position.y + window->window_size.y - 20, 1, WHITE);
-		}
-	}
-}
-
-void floating_window_tiles(Vector2 position, Vector2 scroll) {
-	DrawRectangleGradientV(position.x + 1, position.y + 24, 16 * 16, 16 * 16, EDITOR_BLUE_A, EDITOR_BLUE_B);
-	int static_scroll = (int)(scroll.y / 16.0f) * 16;
-	for (int i = 0; i < 16; ++i) {
-		for (int j = 0; j < 16; ++j) {
-			DrawRectangleLinesEx((Rectangle) { position.x + 1 + (i << 4), position.y + 24 + (j << 4) - static_scroll, 16, 16 }, 1, RED);
-		}
-		for (int j = 0; j < 16; ++j) {
-			DrawRectangleLinesEx((Rectangle) { position.x + 1 + (i << 4), position.y + 24 + 256 + (j << 4) - static_scroll, 16, 16 }, 1, GREEN);
-		}
-		for (int j = 0; j < 16; ++j) {
-			DrawRectangleLinesEx((Rectangle) { position.x + 1 + (i << 4), position.y + 24 + 512 + (j << 4) - static_scroll, 16, 16 }, 1, ORANGE);
-		}
-		for (int j = 0; j < 16; ++j) {
-			DrawRectangleLinesEx((Rectangle) { position.x + 1 + (i << 4), position.y + 24 + 512 + 256 + (j << 4) - static_scroll, 16, 16 }, 1, PURPLE);
+			int sizes[3] = { 5, 7, 8 };
+			for (int i = 0; i < 3; ++i) DrawLine(window->position.x + window->window_size.x - sizes[i], window->position.y + window->window_size.y, window->position.x + window->window_size.x, window->position.y + window->window_size.y - sizes[i], WHITE);
 		}
 	}
 }
@@ -338,7 +394,7 @@ typedef struct editor {
 	int x;
 	float zoom;
 	Texture2D background;
-	floating_window_t tiles_window;
+	tilemap_window_t tiles_window;
 	floating_window_t entities_window;
 } editor_t;
 
@@ -392,7 +448,7 @@ void editor_draw(editor_t* editor) {
 	GuiStatusBar((Rectangle) { 200, h - 24, w - 200, 24 }, TextFormat("Zoom: %i%%", (int)(editor->zoom * 100.0f)));
 
 	// top window thing
-	window_execute(&editor->tiles_window);
+	window_execute(&editor->tiles_window.base);
 }
 
 #endif
@@ -585,6 +641,7 @@ void background_draw(background_t* background) {
 			screen_rect.y = 0;
 		}
 	}
+	DrawRectangle(0, 0, 300, 300, RED);
 	DrawTexturePro(background->tex, bg_rect, screen_rect, (Vector2) { 0, 0 }, 0, WHITE);
 }
 
@@ -884,24 +941,6 @@ Rectangle physics_body_get_rectangle(physics_body_t* body) {
 		.width = body->width,
 		.height = body->height
 	};
-}
-
-bool point_in_rectangle(Vector2 p, Rectangle r) {
-	return CheckCollisionPointRec(p, r);
-}
-
-bool rectangle_collision(Rectangle r1, Rectangle r2) {
-	return ((r1.x < (r2.x + r2.width) && (r1.x + r1.width) > r2.x) &&
-			(r1.y < (r2.y + r2.height) && (r1.y + r1.height) > r2.y));
-}
-
-bool rectangle_collision_list(Rectangle base_rect, Rectangle* recs, int num_rects) {
-	for (int i = 0; i < num_rects; ++i) {
-		if (rectangle_collision(base_rect, recs[i])) {
-			return true;
-		}
-	}
-	return false;
 }
 
 void resolve_collisions_x(physics_body_t* body, tilemap_t* map) {
@@ -1275,13 +1314,15 @@ void game_init(const char* window_title, game_t* game) {
 	GuiLoadStyleDark();
 	editor_t editor = (editor_t) {
 		.zoom = 1.0f,
-		.tiles_window = (floating_window_t) {
-			.title = "Map Tile Selector",
-			.draw_content = floating_window_tiles,
-			.force_scroll_y = true,
-			.content_size = (Vector2) { 256 },
-			.position = (Vector2) { 0 },
-			.window_size = (Vector2) { 256 + 2 + 10, 256 + 24 + 1 },
+		.tiles_window = {
+			.base = (floating_window_t) {
+				.title = "Tile Selector",
+				.draw_content = floating_window_tiles,
+				.resizable = true,
+				.position = (Vector2) { 0 },
+				.window_size = (Vector2) { 256, 256 },
+			},
+			.tilemap = LoadTexture("assets/tiles/glade.png")
 		}
 	};
 	while (!WindowShouldClose()) {
@@ -1342,6 +1383,7 @@ void game_init(const char* window_title, game_t* game) {
 			(Rectangle) { 0, 0, game->render_context.render_texture.texture.width, -game->render_context.render_texture.texture.height },				// src rec
 			(Rectangle) { 0, 0, game->render_context.render_texture.texture.width * 4.0f, -game->render_context.render_texture.texture.height * 4.0f }, // dest rec
 			(Vector2) { 0, 0 }, 0, WHITE); // origin, rotation, blend color
+		
 		DrawTexturePro(hud_texture.texture, (Rectangle) { 0, 0, hud_texture.texture.width, -hud_texture.texture.height }, (Rectangle) { 0, 0, GetScreenWidth(), -GetScreenHeight() }, (Vector2) { 0, 0 }, 0, WHITE);
 
 		EndDrawing();
