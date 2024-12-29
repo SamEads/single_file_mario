@@ -7,18 +7,8 @@
 #include <rlgl.h>
 #include <stb_rect_pack.h>
 
-#pragma region Sounds // TODO: should be passed by context
-
-struct sounds {
-	Sound bump;
-	Sound jump;
-} sounds;
-
-#pragma endregion
-
 #pragma region Defines
 
-#define EDIT_MODE
 #define DEV
 #define LOG_PRINT true
 
@@ -38,18 +28,26 @@ struct sounds {
 
 // game related defines
 #ifdef EDIT_MODE
-#define INIT_SCREEN_WIDTH 854
-#define INIT_SCREEN_HEIGHT 480
+#define INIT_SCREEN_WIDTH	854
+#define INIT_SCREEN_HEIGHT 	480
 #else
-#define INIT_SCREEN_WIDTH GAME_WIDTH * 4
-#define INIT_SCREEN_HEIGHT GAME_WIDTH * 4
+#define INIT_SCREEN_WIDTH 	GAME_WIDTH * 4
+#define INIT_SCREEN_HEIGHT 	GAME_WIDTH * 4
 #endif
 #define MAX_CONTROLLERS 4
 #define ENTITY_DEFAULT_ALLOCATION_SIZE 64
 
 // player speeds
-#define WALK_SPEED 	1.25f
-#define RUN_SPEED 	2.25f
+#define PLAYER_WALK_SPEED 		1.25f
+#define PLAYER_RUN_SPEED 		2.25f
+#define PLAYER_JUMP				5.0f
+#define PLAYER_DECEL			(1.0f / 16.0f)
+#define PLAYER_DECEL_AIR 		(1.0f / 80.0f)
+#define PLAYER_ACCEL			0.09375f
+#define PLAYER_TURN 			0.15625f
+#define PLAYER_TURN_AIR			0.15625f
+#define PLAYER_GRAVITY			0.375f
+#define PLAYER_GRAVITY_HOLD		0.1875f
 
 // background colors
 #define ORANGE_SKY	(Color) { 255, 231, 181, 255 }
@@ -137,6 +135,11 @@ double distance(double x1, double y1, double x2, double y2) {
 
 #pragma region IO
 
+/**
+ * Indexes a path from a consistent format
+ * @param src_loc	Original source, i.e. "player.idle"
+ * @param dest_loc	Destination source, i.e. "player/idle"
+ */
 void path_index(const char* src_loc, char* dest_loc) {
 	int fname_len = strlen(src_loc);
 	memcpy(dest_loc, src_loc, (size_t)(fname_len + 1));
@@ -155,7 +158,7 @@ void path_index(const char* src_loc, char* dest_loc) {
 #pragma region Rectangle bounds
 
 bool point_in_rectangle(Vector2 p, Rectangle r) {
-	return CheckCollisionPointRec(p, r);
+	return ((p.x <= (r.x + r.width) && p.x >= r.x) && (p.y <= (r.y + r.height) && p.y >= r.y));
 }
 
 bool rectangle_collision(Rectangle r1, Rectangle r2) {
@@ -176,13 +179,19 @@ bool rectangle_collision_list(Rectangle base_rect, Rectangle* recs, int num_rect
 
 #pragma region GUI
 #ifdef DEV
+
+#define WINDOW_CLOSEBUTTON_SIZE 	18
+#define WINDOW_MINIMUM_WIDTH 		100
+#define WINDOW_MINIMUM_HEIGHT 		100
+#define WINDOW_STATUSBAR_HEIGHT		24
+
 #ifndef RAYGUI_IMPLEMENTATION
 #define RAYGUI_IMPLEMENTATION
 #include <raygui/raygui.h>
 #include <raygui/styles/dark/style_dark.h>
 
 typedef struct floating_window {
-	char title[128];
+	char title[100];
 	Vector2 position;
 	Vector2 window_size;
 	bool minimized;
@@ -194,6 +203,146 @@ typedef struct floating_window {
 	Vector2 scroll;
 } floating_window_t;
 
+/**
+ * Places window back within screen bounds once the window is unreachable.
+ * @param window Window to fit to screen
+ */
+void window_fit_to_screen(floating_window_t* window) {
+	if (window->position.x + window->window_size.x < 32) {
+		window->position.x = 0;
+	}
+	else if (window->position.x > GetScreenWidth() - 32) {
+		window->position.x = GetScreenWidth() - window->window_size.x;
+	}
+	if (window->position.y < 0) {
+		window->position.y = 0;
+	}
+	else if (window->position.y > GetScreenHeight() - 24) {
+		window->position.y = GetScreenHeight() - 24;
+	}
+}
+
+// https://github.com/raysan5/raygui/blob/master/examples/floating_window/floating_window.c
+void window_run(floating_window_t* window) {
+	if (window->minimized) {
+		return;
+	}
+
+	int close_title_size_delta_half = (RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT - WINDOW_CLOSEBUTTON_SIZE) / 2;
+	Vector2 mouse_position = GetMousePosition();
+	Rectangle resize_collision_rect = { window->position.x + window->window_size.x - 20, window->position.y + window->window_size.y - 20, 20, 20 };
+	bool in_resize_range = CheckCollisionPointRec(mouse_position, resize_collision_rect);
+
+	// window movement and resize input and collision check
+	if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && !window->moving && !window->resizing) {
+		Rectangle title_collision_rect = {
+			window->position.x, window->position.y,
+			window->window_size.x - (WINDOW_CLOSEBUTTON_SIZE + close_title_size_delta_half), RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT
+		};
+
+		if (CheckCollisionPointRec(mouse_position, title_collision_rect)) {
+			window->moving = true;
+		}
+		else if (window->resizable && !window->minimized && in_resize_range) {
+			window->resizing = true;
+		}
+	}
+
+	if (window->resizing || in_resize_range) {
+		// resize cursor
+		SetMouseCursor(MOUSE_CURSOR_RESIZE_NWSE);
+	} else {
+		// default cursor
+		SetMouseCursor(MOUSE_CURSOR_DEFAULT);
+	}
+
+	// window movement and resize update
+	if (window->moving) {
+		Vector2 mouse_delta = GetMouseDelta();
+		window->position.x += mouse_delta.x;
+		window->position.y += mouse_delta.y;
+
+		if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) {
+			window->moving = false;
+
+			// clamp window position keep it inside the application area
+			window_fit_to_screen(window);
+		}
+	}
+	else if (window->resizing) {
+		Vector2 mouse = GetMousePosition();
+		if (mouse.x > window->position.x)
+			window->window_size.x = mouse.x - window->position.x;
+		if (mouse.y > window->position.y)
+			window->window_size.y = mouse.y - window->position.y;
+
+		// clamp window size to an arbitrary minimum value and the window size as the maximum
+		if (window->window_size.x < WINDOW_MINIMUM_WIDTH) window->window_size.x = WINDOW_MINIMUM_WIDTH;
+		else if (window->window_size.x > GetScreenWidth()) window->window_size.x = GetScreenWidth();
+		if (window->window_size.y < WINDOW_MINIMUM_HEIGHT) window->window_size.y = WINDOW_MINIMUM_HEIGHT + WINDOW_STATUSBAR_HEIGHT;
+		else if (window->window_size.y > GetScreenHeight()) window->window_size.y = GetScreenHeight();
+
+		if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) {
+			window->resizing = false;
+		}
+	}
+	else {
+		window_fit_to_screen(window);
+	}
+
+	if (window->minimized) {
+		GuiStatusBar((Rectangle) { window->position.x, window->position.y, window->window_size.x, WINDOW_STATUSBAR_HEIGHT }, window->title);
+
+		// selected un-minimize button
+		if (GuiButton((Rectangle) {
+			window->position.x + window->window_size.x - WINDOW_CLOSEBUTTON_SIZE - close_title_size_delta_half,
+				window->position.y + close_title_size_delta_half,
+				WINDOW_CLOSEBUTTON_SIZE,
+				WINDOW_CLOSEBUTTON_SIZE
+			}, "#120#")) {
+			window->minimized = false;
+		}
+		return;
+	}
+
+	// window->minimized = GuiWindowBox((Rectangle) { window->position.x, window->position.y, window->window_size.x, window->window_size.y }, window->title);
+	// top status bar
+	GuiStatusBar((Rectangle) { window->position.x, window->position.y, window->window_size.x, WINDOW_STATUSBAR_HEIGHT }, window->title);
+
+	Rectangle content_area = (Rectangle) { window->position.x, window->position.y + WINDOW_STATUSBAR_HEIGHT, window->window_size.x, window->window_size.y - WINDOW_STATUSBAR_HEIGHT };
+	GuiPanel(content_area, NULL);
+
+	// window has a custom content drawing operation
+	if (window->draw_content != NULL) {
+		//window->scroll.y += -GetMouseWheelMove() * 10;
+		if (window->resizable) {
+			Rectangle scissor = { 0 };
+
+			int off_x = (int) window->position.x + 1;
+			int off_y = (int) window->position.y + WINDOW_STATUSBAR_HEIGHT;
+
+			float mp_x = mouse_position.x - off_x;
+			float mp_y = mouse_position.y - off_y;
+
+			BeginScissorMode(off_x, off_y, window->window_size.x - 2, window->window_size.y - WINDOW_STATUSBAR_HEIGHT - 1 );
+
+			rlPushMatrix();
+			rlTranslatef(off_x, off_y, 0.0f);
+			window->draw_content(window, (Vector2) { window->window_size.x - 2, window->window_size.y - WINDOW_STATUSBAR_HEIGHT - 1 }, (Vector2) { mp_x, mp_y });
+			rlPopMatrix();
+
+			EndScissorMode();
+		}
+	}
+
+	if (window->resizable) {
+		int sizes[4] = { 4, 5, 7, 8 };
+		for (int i = 0; i < 4; ++i) {
+			DrawLine(window->position.x + window->window_size.x - sizes[i], window->position.y + window->window_size.y, window->position.x + window->window_size.x, window->position.y + window->window_size.y - sizes[i], WHITE);
+		}
+	}
+}
+
 typedef struct tilemap_window {
 	floating_window_t base;
 	Texture2D tilemap;
@@ -201,12 +350,17 @@ typedef struct tilemap_window {
 	Vector2 selected_tile;
 } tilemap_window_t;
 
-void floating_window_tiles(floating_window_t* window, Vector2 size, Vector2 mouse_position) {
+/**
+ * Runs once-per-frame when the tilemap window is open
+ * @param window 			Window to draw
+ * @param size 				Window size
+ * @param mouse_position 	Local mouse position
+ */
+void tilemap_window_draw_content(floating_window_t* window, Vector2 size, Vector2 mouse_position) {
 	// cast to tilemap window
 	tilemap_window_t* tilemap_window = recast(tilemap_window_t, window);
 
-	// deep blue bg
-	// pyle said thanks
+	// background gradient fill
 	DrawRectangleGradientV(0, 0, size.x, size.y, EDITOR_GRADIENT_TOP, EDITOR_GRADIENT_BOTTOM);
 	
 	// tilemap texture
@@ -242,149 +396,10 @@ void floating_window_tiles(floating_window_t* window, Vector2 size, Vector2 mous
 		}
 	}
 
-	// shadow overlay at the bottom of the window
-	DrawRectangleGradientV(0, size.y - 64, size.x, 64, (Color) { 0, 0, 0, 0 }, (Color) { 0, 0, 0, 64 });
+	// soft shadow overlay at the bottom of the window
+	DrawRectangleGradientV(0, size.y - 64, size.x, 64, (Color) { 0 }, (Color) { .a = 64 });
 
 	++tilemap_window->timer;
-}
-
-void window_fit_to_screen(floating_window_t* window) {
-	if (window->position.x < 0) {
-		window->position.x = -(window->window_size.x / 2.0f);
-	}
-	if (window->position.x > GetScreenWidth() - window->window_size.x) {
-		window->position.x = GetScreenWidth() - (window->window_size.x / 2.0f);
-	}
-	if (window->position.y < 0) {
-		window->position.y = 0;
-	}
-	else if (window->position.y > GetScreenHeight()) {
-		window->position.y = GetScreenHeight() - ((!window->minimized) ? (window->window_size.y / 2.0f) : 24);
-	}
-}
-
-// https://github.com/raysan5/raygui/blob/master/examples/floating_window/floating_window.c
-void window_run(floating_window_t* window) {
-	if (window->minimized) {
-		return;
-	}
-#if !defined(RAYGUI_WINDOW_CLOSEBUTTON_SIZE)
-#define RAYGUI_WINDOW_CLOSEBUTTON_SIZE 18
-#endif
-
-	int close_title_size_delta_half = (RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT - RAYGUI_WINDOW_CLOSEBUTTON_SIZE) / 2;
-	Vector2 mouse_position = GetMousePosition();
-	Rectangle resize_collision_rect = { window->position.x + window->window_size.x - 20, window->position.y + window->window_size.y - 20, 20, 20 };
-	bool in_resize_range = CheckCollisionPointRec(mouse_position, resize_collision_rect);
-
-	// window movement and resize input and collision check
-	if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && !window->moving && !window->resizing) {
-
-		Rectangle title_collision_rect = { window->position.x, window->position.y, window->window_size.x - (RAYGUI_WINDOW_CLOSEBUTTON_SIZE + close_title_size_delta_half), RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT };
-
-		if (CheckCollisionPointRec(mouse_position, title_collision_rect)) {
-			window->moving = true;
-		}
-		else if (window->resizable && !window->minimized && in_resize_range) {
-			window->resizing = true;
-		}
-	}
-
-	if (window->resizing || in_resize_range) {
-		SetMouseCursor(MOUSE_CURSOR_RESIZE_NWSE);
-	} else {
-		SetMouseCursor(MOUSE_CURSOR_DEFAULT);
-	}
-
-	// window movement and resize update
-	if (window->moving) {
-		Vector2 mouse_delta = GetMouseDelta();
-		window->position.x += mouse_delta.x;
-		window->position.y += mouse_delta.y;
-
-		if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) {
-			window->moving = false;
-
-			// clamp window position keep it inside the application area
-			window_fit_to_screen(window);
-		}
-
-	}
-	else if (window->resizing) {
-		Vector2 mouse = GetMousePosition();
-		if (mouse.x > window->position.x)
-			window->window_size.x = mouse.x - window->position.x;
-		if (mouse.y > window->position.y)
-			window->window_size.y = mouse.y - window->position.y;
-
-		// clamp window size to an arbitrary minimum value and the window size as the maximum
-		if (window->window_size.x < 100) window->window_size.x = 100;
-		else if (window->window_size.x > GetScreenWidth()) window->window_size.x = GetScreenWidth();
-		if (window->window_size.y < 100) window->window_size.y = 100;
-		else if (window->window_size.y > GetScreenHeight()) window->window_size.y = GetScreenHeight();
-
-		if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) {
-			window->resizing = false;
-		}
-	}
-	else {
-		window_fit_to_screen(window);
-	}
-
-	// window and content drawing with scissor and scroll area
-	if (window->minimized) {
-		GuiStatusBar((Rectangle) { window->position.x, window->position.y, window->window_size.x, RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT }, window->title);
-
-		if (GuiButton((Rectangle) {
-			window->position.x + window->window_size.x - RAYGUI_WINDOW_CLOSEBUTTON_SIZE - close_title_size_delta_half,
-				window->position.y + close_title_size_delta_half,
-				RAYGUI_WINDOW_CLOSEBUTTON_SIZE,
-				RAYGUI_WINDOW_CLOSEBUTTON_SIZE
-		},
-			"#120#")) {
-			window->minimized = false;
-		}
-		return;
-	}
-	else {
-		window->minimized = GuiWindowBox((Rectangle) { window->position.x, window->position.y, window->window_size.x, window->window_size.y }, window->title);
-
-		// scissor and draw content within a scroll panel
-		if (window->draw_content != NULL) {
-			
-			window->scroll.y += -GetMouseWheelMove() * 16;
-			if (window->scroll.y < 0) {
-				window->scroll.y = 0;
-			}
-			if (window->scroll.y > 1024 - 256) {
-				window->scroll.y = 1024 - 256;
-			}
-
-			if (window->resizable) {
-				Rectangle scissor = { 0 };
-
-				int off_x = (int) window->position.x + 1;
-				int off_y = (int) window->position.y + 24;
-
-				float mp_x = mouse_position.x - off_x;
-				float mp_y = mouse_position.y - off_y;
-
-				BeginScissorMode(off_x, off_y, window->window_size.x - 2, window->window_size.y - 24 - 1 );
-
-				rlPushMatrix();
-				rlTranslatef(off_x, off_y, 0.0f);
-				window->draw_content(window, (Vector2) { window->window_size.x - 2, window->window_size.y - 24 - 1 }, (Vector2) { mp_x, mp_y });
-				rlPopMatrix();
-
-				EndScissorMode();
-			}
-		}
-
-		if (window->resizable) {
-			int sizes[4] = { 4, 5, 7, 8 };
-			for (int i = 0; i < 4; ++i) DrawLine(window->position.x + window->window_size.x - sizes[i], window->position.y + window->window_size.y, window->position.x + window->window_size.x, window->position.y + window->window_size.y - sizes[i], WHITE);
-		}
-	}
 }
 
 typedef struct editor {
@@ -403,8 +418,8 @@ void editor_init(editor_t* editor) {
 		.tiles_window = {
 			// floating window base
 			.base = (floating_window_t) {
-				.title = "Tile Selector",
-				.draw_content = floating_window_tiles,
+				.title = "16x16 Tile Selector",
+				.draw_content = tilemap_window_draw_content,
 				.resizable = true,
 				.position = (Vector2) { 0 },
 				.window_size = (Vector2) { 256, 256 },
@@ -434,7 +449,7 @@ void editor_toolbar(editor_t* editor, const int toolbar_width, const int toolbar
 	}
 }
 
-void editor_draw(editor_t* editor) {
+void editor_run(editor_t* editor) {
 	// core window space zoom
 	if (IsKeyDown(KEY_LEFT_CONTROL)) {
 		if (IsKeyPressed(KEY_ZERO)) {
@@ -450,7 +465,7 @@ void editor_draw(editor_t* editor) {
 
 	// toolbar
 	const char* labels[4] = { "File", "Edit", "View", "Options" };
-	editor_toolbar(editor, w, 24, labels, 4);
+	editor_toolbar(editor, w, WINDOW_STATUSBAR_HEIGHT, labels, 4);
 
 	// body
 	// adjust filter style for zoom
@@ -621,6 +636,12 @@ typedef struct background {
 	bool clamp_y;
 } background_t;
 
+/**
+ * Initializes a background
+ * @param res_loc		Local background resource name, ommitting path and file type (i.e. "glade" for "glade.png" inside of the backgrounds folder)
+ * @param background	Background to initialize
+ * @param tiled			Wrap texture at the ends
+ */
 void background_init(const char* res_loc, background_t* background, bool tiled) {
 	*background = (background_t) { 0 };
 
@@ -649,6 +670,10 @@ void background_init(const char* res_loc, background_t* background, bool tiled) 
 	fclose(f);
 }
 
+/**
+ * Draw background to screen using position / offset / parallax data in background
+ * @param background Pointer to background to draw
+ */
 void background_draw(background_t* background) {
 	int bg_x = (int)(background->x * background->parallax_x) % background->tex.width;
 
@@ -666,6 +691,10 @@ void background_draw(background_t* background) {
 	DrawTexturePro(background->tex, bg_rect, screen_rect, (Vector2) { 0, 0 }, 0, WHITE);
 }
 
+/**
+ * Free data inside of a background
+ * @param background Pointer to background to free data from
+ */
 void background_free(background_t* background) {
 	UnloadTexture(background->tex);
 }
@@ -686,6 +715,10 @@ typedef struct sprite {
 	int* order;
 } sprite_t;
 
+/**
+ * Frees the data inside of a sprite
+ * @param sprite Pointer to sprite to free data from
+ */
 void sprite_free(sprite_t* sprite) {
 	if (sprite->frames) {
 		free(sprite->frames);
@@ -715,8 +748,6 @@ void sprite_draw_ex(sprite_t* sprite, int image_index, float x, float y, int ori
 void sprite_draw(sprite_t* sprite, int image_index, float x, float y, bool flip_x, bool flip_y, render_context_t* context) {
 	sprite_draw_ex(sprite, image_index, x, y, 0.0f, 0.0f, flip_x, flip_y, context);
 }
-
-ARRAYLIST_DEFINE(sprite_t*, spriteptr);
 
 void sprite_init(const char* res_loc, sprite_t* sprite, Image* atlas_img, stbrp_context* rect_packer) {
 	// replace all instances of "." with "/" for local resources
@@ -847,6 +878,17 @@ close_file:
     fclose(file);
 }
 
+ARRAYLIST_DEFINE(sprite_t*, spriteptr);
+
+#pragma endregion
+
+#pragma region Sounds // TODO: should be passed by context
+
+struct sounds {
+	Sound bump;
+	Sound jump;
+} sounds;
+
 #pragma endregion
 
 #pragma region Text
@@ -859,6 +901,14 @@ typedef struct font {
 
 font_t fnt_hud;
 
+/**
+ * Initializes a font
+ * @param res_loc		Resource location
+ * @param order			Order of the font (e.g. 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+ * @param font			Pointer to the font to initialize
+ * @param atlas			Pointer to the atlas to add font sprites to
+ * @param rect_packer	Pointer to current atlas packer
+ */
 void font_init(const char* res_loc, const char* order, font_t* font, Image* atlas, stbrp_context* rect_packer) {
 	*font = (font_t) { 0 };
 	sprite_init(res_loc, &font->sprite_data, atlas, rect_packer);
@@ -876,10 +926,22 @@ void font_init(const char* res_loc, const char* order, font_t* font, Image* atla
 #endif
 }
 
+/**
+ * Frees a fonts data
+ * @param font Font to free internal data from
+ */
 void font_free(font_t* font) {
 	sprite_free(&font->sprite_data);
 }
 
+/**
+ * Draws text to the screen at a given position
+ * @param text 		Text to draw
+ * @param font 		Font to draw with
+ * @param x			X position to draw to
+ * @param y			Y position to draw to
+ * @param context	Current rendering context
+ */
 void text_draw(const char* text, font_t* font, float x, float y, render_context_t* context) {
 	size_t string_len = strlen(text), order_len = strlen(font->order);
 	int _x = x, _y = y;
@@ -943,6 +1005,12 @@ struct physics_body {
 	bool grounded;
 };
 
+/**
+ * Initializes a physics body with default values
+ * @param body		Physics body to initialize
+ * @param width		Width of the physics body
+ * @param height	Height of the physics body
+ */
 void physics_body_init(physics_body_t* body, int width, int height) {
 	*body = (physics_body_t) {
 		.width = width,
@@ -955,6 +1023,11 @@ void physics_body_init(physics_body_t* body, int width, int height) {
 	};
 }
 
+/**
+ * Resolves x-axis collisions on a physics body given a tilemap
+ * @param body 	Physics body to perform collisions on
+ * @return Rectangle that contains world space collision bounds
+ */
 Rectangle physics_body_get_rectangle(physics_body_t* body) {
 	return (Rectangle) {
 		.x = body->x - body->width * body->origin_x,
@@ -964,6 +1037,11 @@ Rectangle physics_body_get_rectangle(physics_body_t* body) {
 	};
 }
 
+/**
+ * Resolves x-axis collisions on a physics body given a tilemap
+ * @param body	Physics body to perform collisions on
+ * @param map	Tilemap to check for collisions from
+ */
 void resolve_collisions_x(physics_body_t* body, tilemap_t* map) {
 	int tile_size = map->tile_size;
 
@@ -1000,6 +1078,11 @@ void resolve_collisions_x(physics_body_t* body, tilemap_t* map) {
 	}
 }
 
+/**
+ * Resolves y-axis collisions on a physics body given a tilemap
+ * @param body 	Physics body to perform collisions on
+ * @param map	Tilemap to check for collisions from
+ */
 void resolve_collisions_y(physics_body_t* body, tilemap_t* map) {
 	body->grounded = false;
 	int tile_size = map->tile_size;
@@ -1342,7 +1425,7 @@ void game_init(const char* window_title, game_t* game) {
 	while (!WindowShouldClose()) {
 		BeginDrawing();
 		ClearBackground(BLACK);
-		editor_draw(&editor);
+		editor_run(&editor);
 		EndDrawing();
 	}
 #else
@@ -1532,35 +1615,29 @@ void player_draw(player_t* player, level_t* level, render_context_t* context) {
 }
 
 void player_jump(player_t* player) {
-	player->body.yspd = -5.0f - (fabsf(player->body.xspd / 2.25f));
+	float variable_jump = (fabsf(player->body.xspd / PLAYER_RUN_SPEED)) * 1.0f; // normalize jump between 0 and 1 based on player speed from walk to full height
+	player->body.yspd = -(PLAYER_JUMP + variable_jump);
 	PlaySound(sounds.jump);
 }
 
 void player_move(player_t* player, level_t* level, controller_state_t* controller) {
-	static const float decel = 1.0f / 16.0f;
-	static const float decel_air = 1.0f / 80.0f;
-	static const float accel = 0.09375f;
-	static const float turn = 0.15625f;
-	static const float turn_air = 0.15625f;
-	static const float grav_jump = 0.1875f;
-	static const float grav_fall = 0.375f;
-
-	player->body.grav = (player->body.yspd > 0 || player->body.yspd < 0 && !controller->current.a) ? grav_fall : grav_jump;
+	// A lower gravity is used to make the player jump higher if the player is variable jumping
+	player->body.grav = (controller->current.a) ? PLAYER_GRAVITY_HOLD : PLAYER_GRAVITY;
 
 	if (player->body.grounded && controller->current.a && !controller->previous.a) {
 		player_jump(player);
 	}
 
 	float h = controller->current.h;
-	float traction = 1.0f; // ice would be something like 0.2
+	float traction = 1.0f; // ice would be something like 0.2 for snowy levels
 
 	// player speed can be changed any time on ground, or when the player is in the air and sign of input = spd
 	if ((player->body.grounded) || ((!player->body.grounded && h * player->body.xspd >= 0))) {
-		if (controller->current.b && fabsf(player->body.xspd) >= WALK_SPEED && h * player->body.xspd > 0) {
-			player->body.xspd_max = RUN_SPEED;
+		if (controller->current.b && fabsf(player->body.xspd) >= PLAYER_WALK_SPEED && h * player->body.xspd > 0) {
+			player->body.xspd_max = PLAYER_RUN_SPEED;
 		}
 		else {
-			player->body.xspd_max = WALK_SPEED;
+			player->body.xspd_max = PLAYER_WALK_SPEED;
 		}
 	}
 	else {
@@ -1573,7 +1650,7 @@ void player_move(player_t* player, level_t* level, controller_state_t* controlle
 			player->flip_x = (h < 0) ? true : false;
 			// normal forward acceleration
 			if (h * player->body.xspd > 0) {
-				player->body.xspd += h * accel;
+				player->body.xspd += h * PLAYER_ACCEL;
 			}
 			// skidding
 			else {
@@ -1582,29 +1659,29 @@ void player_move(player_t* player, level_t* level, controller_state_t* controlle
 					// multiplies the turn speed by an amount
 					float skid_factor = 1.0f;
 					float current_xspd = fabsf(player->body.xspd);
-					if (current_xspd <= WALK_SPEED) {
+					if (current_xspd <= PLAYER_WALK_SPEED) {
 						skid_factor = 1.0f;
 					}
-					else if (current_xspd <= RUN_SPEED) {
+					else if (current_xspd <= PLAYER_RUN_SPEED) {
 						skid_factor = 2.0f;
 					}
-					else if (current_xspd > RUN_SPEED) {
+					else if (current_xspd > PLAYER_RUN_SPEED) {
 						skid_factor = 4.0f;
 					}
-					player->body.xspd += h * (turn * skid_factor * traction);
+					player->body.xspd += h * (PLAYER_TURN * skid_factor * traction);
 				}
-				else if (h * player->body.xspd > -WALK_SPEED) {
-					player->body.xspd += h * turn;
+				else if (h * player->body.xspd > -PLAYER_WALK_SPEED) {
+					player->body.xspd += h * PLAYER_TURN;
 				}
 				else
-					player->body.xspd += h * (turn_air * 2);
+					player->body.xspd += h * (PLAYER_TURN_AIR * 2);
 			}
 		}
 	}
 	// no input held down- slow player
 	else if (player->body.xspd != 0) {
 		float xspd_dir = (player->body.xspd > 0) ? 1.0f : -1.0f; // which way the player is moving
-		player->body.xspd -= ((player->body.grounded) ? decel : decel_air) * xspd_dir;
+		player->body.xspd -= ((player->body.grounded) ? PLAYER_DECEL : PLAYER_DECEL_AIR) * xspd_dir;
 		if (player->body.xspd * xspd_dir < 0) {
 			player->body.xspd = 0;
 		}
