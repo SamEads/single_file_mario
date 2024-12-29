@@ -25,5 +25,5 @@ set(PROJECT_INCLUDE "src/")
 
 add_executable(${PROJECT_NAME})
 target_sources(${PROJECT_NAME} PRIVATE ${PROJECT_SOURCES})
-target_include_directories(${PROJECT_NAME} PRIVATE ${PROJECT_INCLUDE} external/stb external/raylib)
+target_include_directories(${PROJECT_NAME} PRIVATE ${PROJECT_INCLUDE} external/stb external/raygui/include)
 target_link_libraries(${PROJECT_NAME} PRIVATE raylib)

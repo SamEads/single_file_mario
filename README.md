@@ -1,26 +1,36 @@
 # single file mario
+<p align="center"><img src="img/screenshot1.png" alt="drawing" width="50%"/></p>
 
 ## About:
-I wanted to create a simple Mario game in a single file. Here's the work in progress of that! The idea is to attempt to improve on my organization / heirarchy skills. Oh, and to work on passing necessary local contexts instead of using a ton of globals.
+I wanted to create a simple Mario game in a single file. Here's the work in progress of that! The idea is to attempt to improve on my organization / heirarchy skills.
 
 ## Dependencies
+Although the only application specific code is within one file (src/main.c), single file mario does rely on several external dependencies.
+
 - [raylib for window/graphics/input/audio](https://github.com/raysan5/raylib)
+
+- [raygui for immediate mode ui elements](https://github.com/raysan5/raygui)
+
 - [stb_rect_pack for sprite atlas packing](https://github.com/nothings/stb/blob/master/stb_rect_pack.h)
 
-## Compiling:
+## Cloning and Building:
 ```sh
-git clone --recursive https://github.com/SamEads/single_file_mario
-cd single_file_mario
-mkdir build
-cd build
+git clone --recursive https://github.com/SamEads/single_file_mario && cd single_file_mario # (recursive clone is necessary for the stb submodule)
+mkdir build && cd build
 cmake ..
 cmake --build .
 ```
 
 ## Running:
-Just run this command from a directory that has the file and assets present:
+Just run this command from a directory that has the assets folder present:
 ```sh
 ./single_file_mario
+```
+
+## Rebuilding:
+Assuming you'll be rebuilding from the top of the repo, you just need to run this after making changes:
+```sh
+cmake --build build # (you can tack on -j <core_count> to the end to utilize multiple cores)
 ```
 
 ## Sprite .dat files:

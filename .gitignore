@@ -1,5 +1,6 @@
 /build
 *.DS_Store
-/external
+/external/stb/*
 .vscode/settings.json
 sprite_atlas_dump.png
+tile_atlas_dump.png

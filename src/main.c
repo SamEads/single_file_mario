@@ -1,13 +1,13 @@
 #include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <raylib.h>
 #include <rlgl.h>
 #include <stb_rect_pack.h>
-#include <string.h>
-#include <math.h>
-#include <stddef.h>
 
-#pragma region Sounds [ Temporary. Should be passed by context ]
+#pragma region Sounds // TODO: should be passed by context
 
 struct sounds {
 	Sound bump;
@@ -38,7 +38,7 @@ struct sounds {
 
 // game related defines
 #ifdef EDIT_MODE
-#define INIT_SCREEN_WIDTH 640
+#define INIT_SCREEN_WIDTH 854
 #define INIT_SCREEN_HEIGHT 480
 #else
 #define INIT_SCREEN_WIDTH GAME_WIDTH * 4
@@ -56,8 +56,8 @@ struct sounds {
 #define BLUE_SKY	(Color) { 0, 99, 189, 255 }
 #define BLACK_SKY	(Color) { 0, 0, 0, 255 }
 
-#define EDITOR_BLUE_A ((Color) { .b = 58, .r = 128, .g = 40, .a = 255 })
-#define EDITOR_BLUE_B ((Color) { .b = 96, .r = 255, .g = 128, .a = 255 })
+#define EDITOR_GRADIENT_TOP 	((Color) { .b = 58, .r = 128, .g = 40, .a = 255 })
+#define EDITOR_GRADIENT_BOTTOM 	((Color) { .b = 96, .r = 255, .g = 128, .a = 255 })
 
 // texture atlas defines
 #define TEXTURE_ATLAS_WIDTH 	512
@@ -78,7 +78,7 @@ struct sounds {
 #define printd(...)
 #endif
 
-#define static_cast(target_type, ptr) \
+#define recast(target_type, ptr) \
 	(target_type*)((char*)(ptr) - offsetof(target_type, base))
 
 #pragma endregion
@@ -178,13 +178,11 @@ bool rectangle_collision_list(Rectangle base_rect, Rectangle* recs, int num_rect
 #ifdef DEV
 #ifndef RAYGUI_IMPLEMENTATION
 #define RAYGUI_IMPLEMENTATION
-#include <raygui.h>
-#include <styles/dark/style_dark.h>
+#include <raygui/raygui.h>
+#include <raygui/styles/dark/style_dark.h>
 
-struct floating_window;
-
-struct floating_window {
-	const char title[128];
+typedef struct floating_window {
+	char title[128];
 	Vector2 position;
 	Vector2 window_size;
 	bool minimized;
@@ -194,9 +192,7 @@ struct floating_window {
 	bool force_scroll_y;
 	void (*draw_content)(struct floating_window*, Vector2, Vector2);
 	Vector2 scroll;
-};
-
-typedef struct floating_window floating_window_t;
+} floating_window_t;
 
 typedef struct tilemap_window {
 	floating_window_t base;
@@ -207,10 +203,11 @@ typedef struct tilemap_window {
 
 void floating_window_tiles(floating_window_t* window, Vector2 size, Vector2 mouse_position) {
 	// cast to tilemap window
-	tilemap_window_t* tilemap_window = static_cast(tilemap_window_t, window);
+	tilemap_window_t* tilemap_window = recast(tilemap_window_t, window);
 
 	// deep blue bg
-	DrawRectangleGradientV(0, 0, size.x, size.y, EDITOR_BLUE_A, EDITOR_BLUE_B);
+	// pyle said thanks
+	DrawRectangleGradientV(0, 0, size.x, size.y, EDITOR_GRADIENT_TOP, EDITOR_GRADIENT_BOTTOM);
 	
 	// tilemap texture
 	DrawTexture(tilemap_window->tilemap, 0, 0, WHITE);
@@ -267,7 +264,7 @@ void window_fit_to_screen(floating_window_t* window) {
 }
 
 // https://github.com/raysan5/raygui/blob/master/examples/floating_window/floating_window.c
-void window_execute(floating_window_t* window) {
+void window_run(floating_window_t* window) {
 	if (window->minimized) {
 		return;
 	}
@@ -384,8 +381,8 @@ void window_execute(floating_window_t* window) {
 		}
 
 		if (window->resizable) {
-			int sizes[3] = { 5, 7, 8 };
-			for (int i = 0; i < 3; ++i) DrawLine(window->position.x + window->window_size.x - sizes[i], window->position.y + window->window_size.y, window->position.x + window->window_size.x, window->position.y + window->window_size.y - sizes[i], WHITE);
+			int sizes[4] = { 4, 5, 7, 8 };
+			for (int i = 0; i < 4; ++i) DrawLine(window->position.x + window->window_size.x - sizes[i], window->position.y + window->window_size.y, window->position.x + window->window_size.x, window->position.y + window->window_size.y - sizes[i], WHITE);
 		}
 	}
 }
@@ -393,12 +390,52 @@ void window_execute(floating_window_t* window) {
 typedef struct editor {
 	int x;
 	float zoom;
-	Texture2D background;
+	Texture2D background_texture;
 	tilemap_window_t tiles_window;
 	floating_window_t entities_window;
+	floating_window_t* active_windows[16]; // hardcoded maximum of 16 open windows- maybe move to heap alloc if this gets crazy but this is fine for now
+	int active_window_count;
 } editor_t;
 
+void editor_init(editor_t* editor) {
+	*editor = (editor_t) {
+		.zoom = 1.0f,	// default zoom of 100%
+		.tiles_window = {
+			// floating window base
+			.base = (floating_window_t) {
+				.title = "Tile Selector",
+				.draw_content = floating_window_tiles,
+				.resizable = true,
+				.position = (Vector2) { 0 },
+				.window_size = (Vector2) { 256, 256 },
+			},
+			// tilemap to render
+			.tilemap = LoadTexture("assets/tiles/glade.png")
+		},
+		.background_texture = LoadTexture("assets/backgrounds/overworld.png"),
+		.active_window_count = 0
+	};
+	SetTextureWrap(editor->background_texture, TEXTURE_WRAP_REPEAT);
+}
+
+void editor_toolbar(editor_t* editor, const int toolbar_width, const int toolbar_height, const char** labels, const int label_count) {
+	// toolbar rectangle
+	GuiDrawRectangle((Rectangle) { .width = toolbar_width, .height = toolbar_height }, GuiGetStyle(STATUSBAR, BORDER_WIDTH), GetColor(GuiGetStyle(STATUSBAR, BORDER)), GetColor(GuiGetStyle(STATUSBAR, BASE)));
+
+	// draw each label
+	const int label_offset = 12;
+	for (int i = 0, current_x_offset = 8; i < label_count; ++i) {
+		const int text_width = GetTextWidth(labels[i]);
+		GuiLabel((Rectangle) { current_x_offset, 0, text_width, toolbar_height }, labels[i]);
+		if (i < label_count - 1) {
+			// increment label spacing, if necessary
+			current_x_offset += text_width + label_offset;
+		}
+	}
+}
+
 void editor_draw(editor_t* editor) {
+	// core window space zoom
 	if (IsKeyDown(KEY_LEFT_CONTROL)) {
 		if (IsKeyPressed(KEY_ZERO)) {
 			editor->zoom = 1.0f;
@@ -412,34 +449,18 @@ void editor_draw(editor_t* editor) {
 	int w = GetScreenWidth(), h = GetScreenHeight();
 
 	// toolbar
-	GuiDrawRectangle((Rectangle) { 0, 0, w, 24 }, GuiGetStyle(STATUSBAR, BORDER_WIDTH), GetColor(GuiGetStyle(STATUSBAR, BORDER)), GetColor(GuiGetStyle(STATUSBAR, BASE)));
-	
-	int offset_size = 12;
-	int _o = 8;
 	const char* labels[4] = { "File", "Edit", "View", "Options" };
-	for (int i = 0; i < 4; ++i) {
-		int _w = GetTextWidth(labels[i]);
-		GuiLabel((Rectangle) { _o, 0, _w, 24 }, labels[i]);
-		if (i < 3) _o += _w + offset_size;
-	}
+	editor_toolbar(editor, w, 24, labels, 4);
 
 	// body
-	if (editor->background.id == 0) {
-		editor->background = LoadTexture("assets/backgrounds/overworld.png");
-		SetTextureWrap(editor->background, TEXTURE_WRAP_REPEAT);
-	}
-
-	if ((float)((int)editor->zoom * 100.0f) != (int)(editor->zoom * 100.0f)) {
-		SetTextureFilter(editor->background, TEXTURE_FILTER_BILINEAR);
-	}
-	else {
-		SetTextureFilter(editor->background, TEXTURE_FILTER_POINT);
-	}
+	// adjust filter style for zoom
+	bool pixel_perfect = (int)(editor->zoom * 100.0f) == (int)(editor->zoom * 100.0f);
+	SetTextureFilter(editor->background_texture, (!pixel_perfect) ? TEXTURE_FILTER_BILINEAR : TEXTURE_FILTER_POINT);
 
 	DrawTexturePro(
-		editor->background,
-		(Rectangle) { .width = w, .height = editor->background.height },
-		(Rectangle) { .y = 24, .width = w * editor->zoom, .height = editor->background.height * editor->zoom },
+		editor->background_texture,
+		(Rectangle) { .width = w, .height = editor->background_texture.height },
+		(Rectangle) { .y = 24, .width = w * editor->zoom, .height = editor->background_texture.height * editor->zoom },
 		(Vector2) { 0, 0 }, 0, WHITE
 	);
 
@@ -447,8 +468,8 @@ void editor_draw(editor_t* editor) {
 	GuiStatusBar((Rectangle) { 0, h - 24, 200, 24 }, "Invalid editor region.");
 	GuiStatusBar((Rectangle) { 200, h - 24, w - 200, 24 }, TextFormat("Zoom: %i%%", (int)(editor->zoom * 100.0f)));
 
-	// top window thing
-	window_execute(&editor->tiles_window.base);
+	// top 
+	window_run(&editor->tiles_window.base);
 }
 
 #endif
@@ -1284,24 +1305,28 @@ void game_init(const char* window_title, game_t* game) {
 		stbrp_node* n = malloc(sizeof(stbrp_node) * MAX_TEXTURE_NODES);
 		stbrp_init_target(&rect_packer, TILE_ATLAS_WIDTH, TILE_ATLAS_HEIGHT, n, MAX_TEXTURE_NODES);
 
-		Image tls = LoadImage("assets/tiles/glade.png");
-		for (int i = 0; i < tls.width / 16; ++i) {
-			for (int j = 0; j < tls.height / 16; ++j) {
-				bool has_img_data = false;
-				for (int x = 0; x < 16; ++x) {
-					for (int y = 0; y < 16; ++y) {
-						Color c_at = GetImageColor(tls, (i * 16) + x, (j * 16) + y);
-						if (c_at.a != 0) {
-							has_img_data = true;
+		const char* tilesets[2] = { "glade", "ice" };
+		const int tile_size = 16;
+		for (int i = 0; i < 2; ++i) {
+			Image tls = LoadImage(TextFormat("assets/tiles/%s.png", tilesets[i]));
+			for (int i = 0; i < tls.width / tile_size; ++i) {
+				for (int j = 0; j < tls.height / tile_size; ++j) {
+					bool has_img_data = false;
+					for (int x = 0; x < tile_size; ++x) {
+						for (int y = 0; y < tile_size; ++y) {
+							Color c_at = GetImageColor(tls, (i * tile_size) + x, (j * tile_size) + y);
+							if (c_at.a != 0) {
+								has_img_data = true;
+							}
 						}
 					}
-				}
-				if (!has_img_data) {
-					continue;
-				}
-				stbrp_rect r = { .w = 16, .h = 16 };
-				if (stbrp_pack_rects(&rect_packer, &r, 1)) {
-					ImageDraw(&atlas_img, tls, (Rectangle) { (i * 16), (j * 16), 16, 16 }, (Rectangle) { r.x, r.y, 16, 16 }, WHITE);
+					if (!has_img_data) {
+						continue;
+					}
+					stbrp_rect r = { .w = tile_size, .h = tile_size };
+					if (stbrp_pack_rects(&rect_packer, &r, 1)) {
+						ImageDraw(&atlas_img, tls, (Rectangle) { (i * tile_size), (j * tile_size), tile_size, tile_size }, (Rectangle) { r.x, r.y, tile_size, tile_size }, WHITE);
+					}
 				}
 			}
 		}
@@ -1312,19 +1337,8 @@ void game_init(const char* window_title, game_t* game) {
 
 #ifdef EDIT_MODE
 	GuiLoadStyleDark();
-	editor_t editor = (editor_t) {
-		.zoom = 1.0f,
-		.tiles_window = {
-			.base = (floating_window_t) {
-				.title = "Tile Selector",
-				.draw_content = floating_window_tiles,
-				.resizable = true,
-				.position = (Vector2) { 0 },
-				.window_size = (Vector2) { 256, 256 },
-			},
-			.tilemap = LoadTexture("assets/tiles/glade.png")
-		}
-	};
+	editor_t editor;
+	editor_init(&editor);
 	while (!WindowShouldClose()) {
 		BeginDrawing();
 		ClearBackground(BLACK);
@@ -1349,7 +1363,7 @@ void game_init(const char* window_title, game_t* game) {
 
 	// controller set-up
 	game->controller_count = 1;
-	game->controllers = calloc(MAX_CONTROLLERS, sizeof(controller_state_t));
+	game->controllers = malloc(MAX_CONTROLLERS * sizeof(controller_state_t));
 
 	// first level init
 	game->level = malloc(sizeof(level_t));
@@ -1439,8 +1453,6 @@ void level_draw(level_t* level, render_context_t* context) {
 
 	rlPushMatrix();
 	rlTranslatef(-level->camera.x, -level->camera.y, 0);
-
-	//DrawTexture(cheat_tileset, 0, 0, WHITE);
 
 	int tile_size = level->tilemap.tile_size;
 	int cam_tile_x1 = level->camera.x / level->tilemap.tile_size, cam_tile_x2 = (level->camera.x + GAME_WIDTH) / (float)tile_size;
